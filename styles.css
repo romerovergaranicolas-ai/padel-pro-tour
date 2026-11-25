@@ -1,0 +1,28 @@
+body {
+  background-color: #F1F5F9;
+  color: #0F172A;
+}
+
+.tab-active {
+  border-bottom: 3px solid #84CC16;
+  color: #0F172A;
+  font-weight: 700;
+}
+
+.tab-inactive {
+  border-bottom: 3px solid transparent;
+  color: #64748B;
+}
+
+.tab-inactive:hover {
+  color: #0F172A;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

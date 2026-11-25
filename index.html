@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PádelTour Pro — Liga, Grupos, Playoffs, Salón de la Fama y Ranking Individual</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['"Plus Jakarta Sans"', 'sans-serif'] },
+          colors: {
+            court: { 900: '#0B132B', 800: '#1C2541', 700: '#2A365C' },
+            tennis: { 400: '#A3E635', 500: '#84CC16', 600: '#65A30D' }
+          }
+        }
+      }
+    }
+  </script>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="min-h-screen flex flex-col">
+
+  <!-- HEADER -->
+  <header class="bg-court-900 text-white shadow-lg sticky top-0 z-30">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-wrap items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-tennis-400 text-court-900 flex items-center justify-center font-extrabold text-xl shadow-inner">
+          🎾
+        </div>
+        <div>
+          <div class="flex items-center gap-2 flex-wrap">
+            <h1 class="text-lg sm:text-xl font-extrabold tracking-tight">PádelTour <span class="text-tennis-400">Pro</span></h1>
+            <select id="seasonSelector" onchange="changeViewedSeason(this.value)" class="text-xs font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-full bg-court-700 text-tennis-400 border border-tennis-400/30 focus:outline-none cursor-pointer">
+            </select>
+          </div>
+          <p class="text-xs text-slate-400">Liga Amateur · Canchas 1-4 · Turnos 19:30 / 21:00</p>
+        </div>
+      </div>
+
+      <!-- Selector de Categorías -->
+      <div class="flex items-center gap-1.5 bg-court-800 p-1.5 rounded-xl overflow-x-auto no-scrollbar max-w-full" id="categoryTabs"></div>
+    </div>
+
+    <!-- Banner de Modo Historial -->
+    <div id="archiveBanner" class="hidden bg-amber-500 text-court-950 text-xs font-extrabold px-4 py-2 text-center">
+      📜 Estás viendo el archivo histórico de una temporada finalizada (Modo Solo Lectura).
+      <button type="button" onclick="changeViewedSeason('current')" class="underline ml-2 hover:text-black">Volver a la Temporada Actual →</button>
+    </div>
+
+    <!-- Navegación Secundaria con Desplazamiento Lateral -->
+    <div class="bg-white border-b border-slate-200 text-sm relative">
+      <div class="max-w-7xl mx-auto relative flex items-center">
+        <button type="button" id="navScrollLeft" onclick="scrollNavTabs(-240)" aria-label="Mover pestañas a la izquierda"
+          class="hidden absolute left-0 z-20 h-full px-2.5 bg-gradient-to-r from-white via-white to-transparent text-slate-700 hover:text-court-900 font-extrabold text-lg items-center">
+          ‹
+        </button>
+
+        <div id="navTabsContainer" onscroll="updateNavScrollButtons()"
+          class="w-full px-4 sm:px-6 lg:px-8 flex gap-5 overflow-x-auto scroll-smooth no-scrollbar">
+          <button type="button" onclick="switchTab('standings')" id="nav-standings" class="py-3 whitespace-nowrap shrink-0 tab-active transition">📊 Tabla de Posiciones</button>
+          <button type="button" onclick="switchTab('fixtures')" id="nav-fixtures" class="py-3 whitespace-nowrap shrink-0 tab-inactive transition">📅 Fixture y Fechas</button>
+          <button type="button" onclick="switchTab('delayed')" id="nav-delayed" class="py-3 whitespace-nowrap shrink-0 tab-inactive transition flex items-center gap-1.5">
+            <span>⏳ Partidos Retrasados</span>
+            <span id="delayedCountBadge" class="hidden text-[10px] font-extrabold px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700 border border-orange-300">0</span>
+          </button>
+          <button type="button" onclick="switchTab('playoffs')" id="nav-playoffs" class="py-3 whitespace-nowrap shrink-0 tab-inactive transition">🏆 Playoffs y Podio</button>
+          <button type="button" onclick="switchTab('champions')" id="nav-champions" class="py-3 whitespace-nowrap shrink-0 tab-inactive transition flex items-center gap-1.5">
+            <span>👑 Salón de la Fama</span>
+            <span id="championsCountBadge" class="hidden text-[10px] font-extrabold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300">0</span>
+          </button>
+          <button type="button" onclick="switchTab('players')" id="nav-players" class="py-3 whitespace-nowrap shrink-0 tab-inactive transition">👤 Jugadores y Perfiles</button>
+          <button type="button" onclick="switchTab('promotions')" id="nav-promotions" class="py-3 whitespace-nowrap shrink-0 tab-inactive transition">↕️ Ascensos y Descensos</button>
+          <button type="button" onclick="switchTab('admin')" id="nav-admin" class="py-3 pr-8 whitespace-nowrap shrink-0 tab-inactive transition">⚙️ Parejas y Formatos</button>
+        </div>
+
+        <button type="button" id="navScrollRight" onclick="scrollNavTabs(240)" aria-label="Mover pestañas a la derecha"
+          class="hidden absolute right-0 z-20 h-full px-2.5 bg-gradient-to-l from-white via-white to-transparent text-slate-700 hover:text-court-900 font-extrabold text-lg items-center">
+          ›
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- CONTENIDO PRINCIPAL -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6" id="kpiBar"></div>
+    <div id="appContent"></div>
+  </main>
+
+  <!-- MODAL PARA GESTIONAR PARTIDO DE LIGA -->
+  <div id="matchModal" data-modal-backdrop onclick="handleBackdropClick(event, closeMatchModal)" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm hidden items-center justify-center z-50 p-4 overflow-y-auto">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-200 my-auto">
+      <div class="bg-court-900 text-white px-5 py-4 flex justify-between items-center">
+        <div>
+          <span id="modalMatchInfo" class="text-xs text-tennis-400 font-semibold uppercase tracking-wider">Fecha 1</span>
+          <h3 class="text-base font-bold">Gestionar Partido y Marcador</h3>
+        </div>
+        <button type="button" onclick="closeMatchModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+      </div>
+
+      <form id="matchForm" class="p-5 space-y-4">
+        <input type="hidden" id="modalMatchId" />
+
+        <div class="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-3">
+          <div class="text-xs font-extrabold uppercase text-slate-600 flex items-center justify-between">
+            <span>📍 Programación y Cancha</span>
+            <span class="text-[11px] font-medium text-slate-400">Turnos oficiales</span>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            <div>
+              <label class="block text-[11px] font-bold text-slate-600 mb-1">Cancha</label>
+              <select id="modalCourt" class="w-full text-xs font-bold rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-slate-800 focus:ring-2 focus:ring-tennis-500 focus:outline-none">
+                <option value="Cancha 1">Cancha 1</option>
+                <option value="Cancha 2">Cancha 2</option>
+                <option value="Cancha 3">Cancha 3</option>
+                <option value="Cancha 4">Cancha 4</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-[11px] font-bold text-slate-600 mb-1">Turno / Horario</label>
+              <select id="modalTime" class="w-full text-xs font-bold rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-slate-800 focus:ring-2 focus:ring-tennis-500 focus:outline-none">
+                <option value="19:30">19:30 hrs</option>
+                <option value="21:00">21:00 hrs</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-[11px] font-bold text-slate-600 mb-1">Día / Fecha Cal.</label>
+              <input type="text" id="modalCustomDate" placeholder="Ej: Sáb 28 Nov" class="w-full text-xs font-semibold rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-slate-800 focus:ring-2 focus:ring-tennis-500 focus:outline-none">
+            </div>
+          </div>
+
+          <div class="pt-2 border-t border-slate-200/80">
+            <label class="flex items-center gap-2.5 cursor-pointer select-none">
+              <input type="checkbox" id="isDelayed" onchange="toggleDelayedUI()" class="w-4 h-4 rounded text-orange-600 focus:ring-orange-500">
+              <span class="text-xs font-bold text-orange-800">⏳ Marcar como Partido Retrasado / Reprogramado</span>
+            </label>
+            <div id="delayedNoteBox" class="hidden mt-2">
+              <input type="text" id="delayedNote" placeholder="Motivo opcional (ej: Lluvia, lesión, acuerdo entre parejas)" class="w-full text-xs rounded-lg border border-orange-300 bg-orange-50/50 px-2.5 py-1.5 text-slate-800 focus:outline-none">
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-amber-50/80 border border-amber-200 rounded-xl p-3">
+          <label class="flex items-center gap-2.5 cursor-pointer select-none">
+            <input type="checkbox" id="isWalkover" onchange="toggleWalkoverUI()" class="w-4 h-4 rounded text-amber-600 focus:ring-amber-500">
+            <span class="text-xs font-bold text-amber-900">Walkover / No se presentó (W.O.)</span>
+          </label>
+          <div id="woSelectorBox" class="hidden mt-2.5 pt-2.5 border-t border-amber-200/70">
+            <label class="block text-[11px] font-semibold text-amber-800 mb-1">¿Qué pareja NO se presentó? (0 pts, pierde 0-6, 0-6)</label>
+            <select id="woAbsentTeam" onchange="updatePointsPreview()" class="w-full text-xs font-semibold rounded-lg border border-amber-300 bg-white px-2.5 py-2 text-slate-800 focus:outline-none">
+              <option value="A">Pareja Local (A)</option>
+              <option value="B">Pareja Visitante (B)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="bg-slate-50 rounded-xl p-3.5 border border-slate-200">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-extrabold uppercase text-slate-600">🎾 Marcador (Opcional si aún no se juega)</span>
+          </div>
+          <div class="grid grid-cols-12 gap-2 items-center text-xs font-bold text-slate-500 mb-2">
+            <div class="col-span-6">PAREJA</div>
+            <div class="col-span-2 text-center">SET 1</div>
+            <div class="col-span-2 text-center">SET 2</div>
+            <div class="col-span-2 text-center">SET 3*</div>
+          </div>
+          <div class="grid grid-cols-12 gap-2 items-center mb-3">
+            <div class="col-span-6 font-bold text-sm text-slate-800 truncate" id="modalTeamAName">Pareja A</div>
+            <div class="col-span-2"><input type="number" min="0" max="7" id="s1A" oninput="updatePointsPreview()" placeholder="-" class="w-full text-center font-bold border border-slate-300 rounded-lg py-1.5 focus:ring-2 focus:ring-tennis-500 focus:outline-none disabled:bg-slate-200 disabled:text-slate-500"></div>
+            <div class="col-span-2"><input type="number" min="0" max="7" id="s2A" oninput="updatePointsPreview()" placeholder="-" class="w-full text-center font-bold border border-slate-300 rounded-lg py-1.5 focus:ring-2 focus:ring-tennis-500 focus:outline-none disabled:bg-slate-200 disabled:text-slate-500"></div>
+            <div class="col-span-2"><input type="number" min="0" max="20" id="s3A" oninput="updatePointsPreview()" placeholder="-" class="w-full text-center font-bold border border-slate-300 rounded-lg py-1.5 focus:ring-2 focus:ring-tennis-500 focus:outline-none disabled:bg-slate-200 disabled:text-slate-500"></div>
+          </div>
+          <div class="grid grid-cols-12 gap-2 items-center">
+            <div class="col-span-6 font-bold text-sm text-slate-800 truncate" id="modalTeamBName">Pareja B</div>
+            <div class="col-span-2"><input type="number" min="0" max="7" id="s1B" oninput="updatePointsPreview()" placeholder="-" class="w-full text-center font-bold border border-slate-300 rounded-lg py-1.5 focus:ring-2 focus:ring-tennis-500 focus:outline-none disabled:bg-slate-200 disabled:text-slate-500"></div>
+            <div class="col-span-2"><input type="number" min="0" max="7" id="s2B" oninput="updatePointsPreview()" placeholder="-" class="w-full text-center font-bold border border-slate-300 rounded-lg py-1.5 focus:ring-2 focus:ring-tennis-500 focus:outline-none disabled:bg-slate-200 disabled:text-slate-500"></div>
+            <div class="col-span-2"><input type="number" min="0" max="20" id="s3B" oninput="updatePointsPreview()" placeholder="-" class="w-full text-center font-bold border border-slate-300 rounded-lg py-1.5 focus:ring-2 focus:ring-tennis-500 focus:outline-none disabled:bg-slate-200 disabled:text-slate-500"></div>
+          </div>
+          <p class="text-[11px] text-slate-400 mt-2.5">*Deja los sets vacíos si solo quieres guardar el cambio de cancha, turno o retraso.</p>
+        </div>
+
+        <div id="pointsPreviewBox" class="bg-slate-100 border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs flex items-center justify-between">
+          <span class="text-slate-500 font-medium">Reparto de puntos:</span>
+          <span id="pointsPreviewText" class="font-bold text-slate-700">Sin marcador ingresado</span>
+        </div>
+
+        <div class="flex items-center justify-between pt-2">
+          <button type="button" onclick="clearMatchResult()" class="text-xs font-semibold text-rose-600 hover:text-rose-700 px-3 py-2 rounded-lg hover:bg-rose-50">Borrar marcador</button>
+          <div class="flex gap-2">
+            <button type="button" onclick="closeMatchModal()" class="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-xl">Cancelar</button>
+            <button type="submit" class="px-5 py-2 text-sm font-bold bg-court-900 hover:bg-court-800 text-white rounded-xl shadow">Guardar Cambios</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL PARA GESTIONAR PARTIDO DE PLAYOFFS -->
+  <div id="playoffModal" data-modal-backdrop onclick="handleBackdropClick(event, closePlayoffModal)" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm hidden items-center justify-center z-50 p-4 overflow-y-auto">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-200 my-auto">
+      <div class="bg-court-900 text-white px-5 py-4 flex justify-between items-center">
+        <div>
+          <span id="poModalTitle" class="text-xs text-tennis-400 font-semibold uppercase tracking-wider">Eliminatoria</span>
+          <h3 class="text-base font-bold">Resultado y Programación de Playoff</h3>
+        </div>
+        <button type="button" onclick="closePlayoffModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+      </div>
+
+      <form id="playoffForm" class="p-5 space-y-4">
+        <input type="hidden" id="poModalStage" />
+
+        <div class="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-3">
+          <div class="text-xs font-extrabold uppercase text-slate-600">📍 Cancha y Horario de la Llave</div>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            <div>
+              <label class="block text-[11px] font-bold text-slate-600 mb-1">Cancha</label>
+              <select id="poModalCourt" class="w-full text-xs font-bold rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-slate-800 focus:ring-2 focus:ring-tennis-500 focus:outline-none">
+                <option value="Cancha 1">Cancha 1</option>
+                <option value="Cancha 2">Cancha 2</option>
+                <option value="Cancha 3">Cancha 3</option>
+                <option value="Cancha 4">Cancha 4</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-[11px] font-bold text-slate-600 mb-1">Turno / Horario</label>
+              <select id="poModalTime" class="w-full text-xs font-bold rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-slate-800 focus:ring-2 focus:ring-tennis-500 focus:outline-none">
+                <option value="19:30">19:30 hrs</option>
+                <option value="21:00">21:00 hrs</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-[11px] font-bold text-slate-600 mb-1">Día / Fecha</label>
+              <input type="text" id="poModalDate" placeholder="Ej: Dom 14 Dic" class="w-full text-xs font-semibold rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-slate-800 focus:ring-2 focus:ring-tennis-500 focus:outline-none">
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-amber-50/80 border border-amber-200 rounded-xl p-3">
+          <label class="flex items-center gap-2.5 cursor-pointer select-none">
+            <input type="checkbox" id="poIsWalkover" onchange="togglePoWalkoverUI()" class="w-4 h-4 rounded text-amber-600 focus:ring-amber-500">
+            <span class="text-xs font-bold text-amber-900">Walkover / No se presentó (W.O.)</span>
+          </label>
+          <div id="poWoSelectorBox" class="hidden mt-2.5 pt-2.5 border-t border-amber-200/70">
+            <label class="block text-[11px] font-semibold text-amber-800 mb-1">¿Qué pareja NO se presentó? (Avanza el rival)</label>
+            <select id="poWoAbsentTeam" onchange="updatePoPreview()" class="w-full text-xs font-semibold rounded-lg border border-amber-300 bg-white px-2.5 py-2 text-slate-800 focus:outline-none">
+              <option value="A">Pareja Superior (A)</option>
+              <option value="B">Pareja Inferior (B)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="bg-slate-50 rounded-xl p-3.5 border border-slate-200">
+          <div class="text-xs font-extrabold uppercase text-slate-600 mb-2">🎾 Marcador del Partido Eliminatorio</div>
+          <div class="grid grid-cols-12 gap-2 items-center text-xs font-bold text-slate-500 mb-2">
+            <div class="col-span-6">PAREJA</div>
+            <div class="col-span-2 text-center">SET 1</div>
+            <div class="col-span-2 text-center">SET 2</div>
+            <div class="col-span-2 text-center">SET 3*</div>
+          </div>
+          <div class="grid grid-cols-12 gap-2 items-center mb-3">
+            <div class="col-span-6 font-bold text-sm text-slate-800 truncate" id="poTeamAName">Pareja A</div>
+            <div class="col-span-2"><input type="number" min="0" max="7" id="poS1A" oninput="updatePoPreview()" placeholder="-" class="w-full text-center font-bold border border-slate-300 rounded-lg py-1.5 focus:ring-2 focus:ring-tennis-500 focus:outline-none disabled:bg-slate-200"></div>
+            <div class="col-span-2"><input type="number" min="0" max="7" id="poS2A" oninput="updatePoPreview()" placeholder="-" class="w-full text-center font-bold border border-slate-300 rounded-lg py-1.5 focus:ring-2 focus:ring-tennis-500 focus:outline-none disabled:bg-slate-200"></div>
+            <div class="col-span-2"><input type="number" min="0" max="20" id="poS3A" oninput="updatePoPreview()" placeholder="-" class="w-full text-center font-bold border border-slate-300 rounded-lg py-1.5 focus:ring-2 focus:ring-tennis-500 focus:outline-none disabled:bg-slate-200"></div>
+          </div>
+          <div class="grid grid-cols-12 gap-2 items-center">
+            <div class="col-span-6 font-bold text-sm text-slate-800 truncate" id="poTeamBName">Pareja B</div>
+            <div class="col-span-2"><input type="number" min="0" max="7" id="poS1B" oninput="updatePoPreview()" placeholder="-" class="w-full text-center font-bold border border-slate-300 rounded-lg py-1.5 focus:ring-2 focus:ring-tennis-500 focus:outline-none disabled:bg-slate-200"></div>
+            <div class="col-span-2"><input type="number" min="0" max="7" id="poS2B" oninput="updatePoPreview()" placeholder="-" class="w-full text-center font-bold border border-slate-300 rounded-lg py-1.5 focus:ring-2 focus:ring-tennis-500 focus:outline-none disabled:bg-slate-200"></div>
+            <div class="col-span-2"><input type="number" min="0" max="20" id="poS3B" oninput="updatePoPreview()" placeholder="-" class="w-full text-center font-bold border border-slate-300 rounded-lg py-1.5 focus:ring-2 focus:ring-tennis-500 focus:outline-none disabled:bg-slate-200"></div>
+          </div>
+          <p class="text-[11px] text-slate-400 mt-2.5">*Al guardar un marcador válido, el ganador avanzará automáticamente a la siguiente ronda.</p>
+        </div>
+
+        <div class="bg-slate-100 border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs flex items-center justify-between">
+          <span class="text-slate-500 font-medium">Clasificado según marcador:</span>
+          <span id="poPreviewText" class="font-bold text-slate-700">Sin marcador ingresado</span>
+        </div>
+
+        <div class="flex items-center justify-between pt-2">
+          <button type="button" onclick="clearPlayoffFromModal()" class="text-xs font-bold text-rose-600 hover:text-rose-700 px-3 py-2 rounded-lg hover:bg-rose-50">↩ Borrar resultado y selección</button>
+          <div class="flex gap-2">
+            <button type="button" onclick="closePlayoffModal()" class="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-xl">Cancelar</button>
+            <button type="submit" class="px-5 py-2 text-sm font-bold bg-court-900 hover:bg-court-800 text-white rounded-xl shadow">Guardar</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL PERFIL PERSONAL DEL JUGADOR -->
+  <div id="playerProfileModal" data-modal-backdrop onclick="handleBackdropClick(event, closePlayerProfile)" class="fixed inset-0 bg-slate-900/70 backdrop-blur-sm hidden items-center justify-center z-50 p-4 overflow-y-auto">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-2xl w-full overflow-hidden border border-slate-200 my-auto">
+      <div class="bg-court-900 text-white px-6 py-4 flex justify-between items-center">
+        <div class="flex items-center gap-3">
+          <div id="profAvatarHeader" class="w-11 h-11 rounded-full bg-tennis-400 text-court-900 font-extrabold flex items-center justify-center text-base overflow-hidden border-2 border-white/20"></div>
+          <div>
+            <span class="text-[11px] text-tennis-400 font-bold uppercase tracking-wider">Espacio Personal del Jugador</span>
+            <h3 id="profNameHeader" class="text-lg font-extrabold">Nombre Jugador</h3>
+          </div>
+        </div>
+        <button type="button" onclick="closePlayerProfile()" class="text-slate-400 hover:text-white text-2xl leading-none">&times;</button>
+      </div>
+
+      <div class="p-6 space-y-6 max-h-[82vh] overflow-y-auto">
+        <input type="hidden" id="profPlayerId" />
+        <div id="profStatsRow" class="grid grid-cols-2 sm:grid-cols-4 gap-3"></div>
+
+        <form onsubmit="savePlayerProfile(event)" class="space-y-4">
+          <div class="text-xs font-extrabold uppercase text-slate-500 border-b border-slate-200 pb-1.5">📋 Ficha Técnica y Datos Personales</div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+            <div>
+              <label class="block font-bold text-slate-600 mb-1">Nombre Completo</label>
+              <input type="text" id="profName" required class="w-full border border-slate-300 rounded-xl px-3 py-2 font-semibold">
+            </div>
+            <div>
+              <label class="block font-bold text-slate-600 mb-1">Teléfono / WhatsApp</label>
+              <input type="text" id="profPhone" placeholder="+56 9 ..." class="w-full border border-slate-300 rounded-xl px-3 py-2 font-semibold">
+            </div>
+            <div>
+              <label class="block font-bold text-slate-600 mb-1">Posición Preferida</label>
+              <select id="profSide" class="w-full border border-slate-300 rounded-xl px-3 py-2 font-semibold bg-white">
+                <option value="Drive">Drive (Derecha)</option>
+                <option value="Revés">Revés (Izquierda)</option>
+                <option value="Ambos lados">Ambos lados</option>
+              </select>
+            </div>
+            <div>
+              <label class="block font-bold text-slate-600 mb-1">Mano Hábil</label>
+              <select id="profHand" class="w-full border border-slate-300 rounded-xl px-3 py-2 font-semibold bg-white">
+                <option value="Diestro">Diestro</option>
+                <option value="Zurdo">Zurdo</option>
+              </select>
+            </div>
+            <div>
+              <label class="block font-bold text-slate-600 mb-1">Paleta / Equipamiento</label>
+              <input type="text" id="profRacket" placeholder="Ej: NOX AT10 / Bullpadel Vertex" class="w-full border border-slate-300 rounded-xl px-3 py-2 font-semibold">
+            </div>
+            <div>
+              <label class="block font-bold text-slate-600 mb-1">Instagram / Red Social</label>
+              <input type="text" id="profSocial" placeholder="@usuario" class="w-full border border-slate-300 rounded-xl px-3 py-2 font-semibold">
+            </div>
+          </div>
+
+          <div class="text-xs">
+            <label class="block font-bold text-slate-600 mb-1">Biografía, Disponibilidad Horaria o Notas Personales</label>
+            <textarea id="profBio" rows="2" placeholder="Ej: Disponible de lunes a jueves desde las 19:30..." class="w-full border border-slate-300 rounded-xl px-3 py-2 font-medium"></textarea>
+          </div>
+
+          <div class="flex justify-end">
+            <button type="submit" class="px-4 py-2 rounded-xl bg-court-900 hover:bg-court-800 text-white text-xs font-bold shadow">💾 Guardar Información Personal</button>
+          </div>
+        </form>
+
+        <div class="space-y-3 pt-2 border-t border-slate-200">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div class="text-xs font-extrabold uppercase text-slate-700">📸 Galería Personal de Fotografías</div>
+              <p class="text-[11px] text-slate-400">Sube fotos de partidos, trofeos o foto de perfil (máx. 6 fotos por jugador).</p>
+            </div>
+            <label class="cursor-pointer px-3.5 py-2 rounded-xl bg-tennis-400 hover:bg-tennis-500 text-court-900 text-xs font-extrabold shadow-sm transition">
+              + Subir Fotografía
+              <input type="file" accept="image/*" onchange="handlePhotoUpload(event)" class="hidden">
+            </label>
+          </div>
+
+          <div id="profPhotosGrid" class="grid grid-cols-2 sm:grid-cols-3 gap-3"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL PARA REEMPLAZO RÁPIDO DE JUGADOR EN PAREJA -->
+  <div id="swapPlayerModal" data-modal-backdrop onclick="handleBackdropClick(event, closeSwapPlayerModal)" class="fixed inset-0 bg-slate-900/65 backdrop-blur-sm hidden items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden border border-slate-200">
+      <div class="bg-court-900 text-white px-5 py-4 flex justify-between items-center">
+        <div>
+          <span class="text-[11px] text-tennis-400 font-bold uppercase tracking-wider">Sustitución en Pareja Activa</span>
+          <h3 id="swapTeamTitle" class="text-base font-extrabold">Pareja</h3>
+        </div>
+        <button type="button" onclick="closeSwapPlayerModal()" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+      </div>
+
+      <form onsubmit="confirmSwapPlayer(event)" class="p-5 space-y-4 text-xs">
+        <input type="hidden" id="swapTeamId" />
+        <p class="text-slate-600 leading-relaxed">
+          Cambia a uno de los integrantes por un reemplazo del pool. <strong>Los partidos ya jugados conservan a los jugadores que los disputaron</strong>; el reemplazo solo aplicará en los partidos pendientes y sumará puntos desde este momento.
+        </p>
+
+        <div>
+          <label class="block font-bold text-slate-700 mb-1">1. ¿Qué jugador sale de la pareja?</label>
+          <select id="swapOutgoingSlot" class="w-full border border-slate-300 rounded-xl px-3 py-2 font-bold bg-white">
+            <option value="1">Jugador 1</option>
+            <option value="2">Jugador 2</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block font-bold text-slate-700 mb-1">2. Selecciona al jugador reemplazo (con su puntaje):</label>
+          <select id="swapIncomingPlayerId" required class="w-full border border-slate-300 rounded-xl px-3 py-2 font-bold bg-white">
+          </select>
+        </div>
+
+        <label class="flex items-center gap-2 cursor-pointer select-none pt-1">
+          <input type="checkbox" id="swapUpdatePairName" checked class="w-4 h-4 rounded text-tennis-600">
+          <span class="font-semibold text-slate-700">Actualizar automáticamente el nombre de la pareja</span>
+        </label>
+
+        <div class="flex justify-end gap-2 pt-2 border-t border-slate-100">
+          <button type="button" onclick="closeSwapPlayerModal()" class="px-4 py-2 font-semibold text-slate-600 hover:bg-slate-100 rounded-xl">Cancelar</button>
+          <button type="submit" class="px-4 py-2 font-bold bg-court-900 hover:bg-court-800 text-white rounded-xl shadow">Confirmar Reemplazo</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- TOAST NOTIFICATIONS -->
+  <div id="toastBox" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/sql-wasm.js"></script>
+<script defer src="db.js"></script>
+<script defer src="engine.js"></script>
+<script defer src="state.js"></script>
+<script defer src="ui.js"></script>
+<script defer src="app.js"></script>
+
+
+
+</body>
+</html>
