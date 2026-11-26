@@ -1352,6 +1352,7 @@ function transformDomStandingsTables(cat) {
 }
 
 window.transformDomStandingsTables = transformDomStandingsTables;
+
 function syncPublicPlayerCardProfileButtons() {
   if (window.__isLeagueAdmin) return;
 
@@ -1374,6 +1375,23 @@ function syncPublicPlayerCardProfileButtons() {
   });
 }
 
+function applyMobileTablesAndPhotosLayout() {
+  document.querySelectorAll('table').forEach(tbl => {
+    const parent = tbl.parentElement;
+    if (!parent) return;
+
+    const alreadyWrapped =
+      parent.classList.contains('mobile-table-scroll') ||
+      parent.classList.contains('overflow-x-auto');
+
+    if (!alreadyWrapped) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'mobile-table-scroll';
+      parent.insertBefore(wrapper, tbl);
+      wrapper.appendChild(tbl);
+    }
+  });
+}
 
 function runPostRenderEnhancements() {
   if (typeof state === 'object' && state) {
@@ -1391,7 +1409,10 @@ function runPostRenderEnhancements() {
   transformDomStandingsTables(activeCat);
   setupScoreboardZigzagNavigation();
   bindModalWoAutoFill();
-  syncPublicPlayerCardProfileButtons();
+  if (typeof syncPublicPlayerCardProfileButtons === 'function') {
+    syncPublicPlayerCardProfileButtons();
+  }
+  applyMobileTablesAndPhotosLayout();
 }
 
 function wrapRenderIfAvailable() {
@@ -3580,7 +3601,6 @@ function renderPlayerGalleryHtml(player) {
   `;
 }
 
-
 function refreshPlayerEditorModal(playerId) {
   const modal = document.getElementById('playerEditorModal');
   if (!modal || modal.classList.contains('hidden')) return;
@@ -3790,7 +3810,6 @@ function openEditPlayerModal(playerId, focusPhotos = false) {
 }
 
 window.openEditPlayerModal = openEditPlayerModal;
-
 
 function openPlayerProfile(playerId) {
   openEditPlayerModal(playerId, true);

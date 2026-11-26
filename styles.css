@@ -26,3 +26,85 @@ body {
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+/* Mejoras de visualización en celular para tablas y fotos */
+html, body {
+  max-width: 100%;
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Contenedor con desplazamiento horizontal suave para tablas anchas */
+.mobile-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Fotos en modales y tarjetas: nunca se salen del ancho ni se deforman */
+#playerEditorModal img,
+[data-hof-photo-slot="true"] img {
+  max-width: 100%;
+  height: auto;
+}
+
+@media (max-width: 640px) {
+  /* Tablas compactas y legibles sin desbordar la pantalla */
+  .mobile-table-scroll table,
+  table {
+    min-width: 540px;
+    font-size: 11px !important;
+  }
+
+  .mobile-table-scroll th,
+  .mobile-table-scroll td {
+    padding-left: 6px !important;
+    padding-right: 6px !important;
+    padding-top: 6px !important;
+    padding-bottom: 6px !important;
+  }
+
+  /* Galería del modal de jugador en 2 columnas en celular */
+  #editPlayerGalleryBox .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+
+  /* Foto de perfil dentro del modal en tamaño proporcionado */
+  #editPlayerAvatarPreview {
+    width: 44px !important;
+    height: 44px !important;
+  }
+
+  /* Foto del Salón de la Fama adaptada al ancho del celular */
+  [data-hof-photo-slot="true"] > div:last-child,
+  [data-hof-photo-slot="true"] img {
+    max-height: 220px !important;
+  }
+
+  /* Modales con margen y scroll interno en pantallas pequeñas */
+  [id$="Modal"],
+  [id$="modal"] {
+    padding: 12px !important;
+  }
+
+  [id$="Modal"] > div,
+  [id$="modal"] > div {
+    max-height: 88vh;
+    overflow-y: auto;
+    width: 100%;
+    max-width: 100%;
+  }
+
+  /* Barra flotante de admin adaptada en celular */
+  #league-admin-floating-bar {
+    left: 12px !important;
+    right: 12px !important;
+    bottom: 12px !important;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px !important;
+    padding: 8px 10px !important;
+    font-size: 11px !important;
+  }
+}
