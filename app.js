@@ -5475,6 +5475,69 @@ function findFixtureListContainer() {
   return null;
 }
 
+if (!window.__wrappedFindFixtureListContainer) {
+  window.__wrappedFindFixtureListContainer = true;
+  const __origFindFixtureListContainer = findFixtureListContainer;
+
+  findFixtureListContainer = function (...args) {
+    const res = __origFindFixtureListContainer.apply(this, args);
+    if (res && res.parent && res.insertBeforeEl) {
+      return res;
+    }
+
+    const appContent = document.getElementById('appContent');
+    if (!appContent) return null;
+
+    // Fallback 1: tarjetas de partidos con "fecha X" y "cancha X" aunque aún no tengan estado
+    const freshCards = Array.from(appContent.querySelectorAll('div, article, li')).filter(el => {
+      if (el.closest('#fixturePairOrPlayerPanel, #twoGroupsStandingsPanel, nav, header')) return false;
+      const style = window.getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      if (style.display === 'none' || style.visibility === 'hidden' || rect.width === 0 || rect.height === 0) {
+        return false;
+      }
+      const raw = (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      return /\bfecha\s+\d+\b/.test(raw) && /\bcancha\s+\d+\b/.test(raw) && el.children.length >= 2 && el.children.length <= 12;
+    });
+
+    const freshLeafCards = freshCards.filter(
+      card => !freshCards.some(other => other !== card && card.contains(other))
+    );
+
+    if (freshLeafCards.length > 0) {
+      let gridEl = freshLeafCards[0].parentElement;
+      for (let i = 0; i < 3 && gridEl?.parentElement; i++) {
+        if (freshLeafCards.filter(c => gridEl.contains(c)).length >= Math.min(2, freshLeafCards.length)) {
+          break;
+        }
+        gridEl = gridEl.parentElement;
+      }
+      if (gridEl && gridEl.parentElement) {
+        return {
+          insertBeforeEl: gridEl,
+          parent: gridEl.parentElement,
+          cards: freshLeafCards
+        };
+      }
+    }
+
+    // Fallback 2: justo después de la barra de fechas ("Todas las Fechas" / "Fecha 1")
+    const dateBtn = Array.from(appContent.querySelectorAll('button')).find(btn =>
+      /todas las fechas|^fecha\s*\d+/i.test((btn.textContent || '').trim())
+    );
+    const dateBar = dateBtn ? (dateBtn.closest('.bg-white') || dateBtn.parentElement) : null;
+    if (dateBar && dateBar.parentElement && dateBar.nextElementSibling) {
+      return {
+        parent: dateBar.parentElement,
+        insertBeforeEl: dateBar.nextElementSibling,
+        cards: []
+      };
+    }
+
+    return null;
+  };
+}
+
 function applyFixtureCardsFilter(cards, cat, mode, selectedPair, selectedPlayer, searchLower) {
   if (!Array.isArray(cards) || !cards.length) return;
 
@@ -7341,6 +7404,7 @@ if (!window.__versusHardFilterPatchBound) {
     );
   });
 }
+
 
 
 window.addEventListener('DOMContentLoaded', initApp);
