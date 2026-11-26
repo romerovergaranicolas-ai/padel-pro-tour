@@ -4936,6 +4936,20 @@ function applyReadOnlyRestrictions() {
   }
 
   document.querySelectorAll('button, label, a[role="button"]').forEach(el => {
+    if (
+      el.closest('#versusInPlayersTabSection') ||
+      el.closest('[data-readonly-allowed="true"]') ||
+      el.getAttribute('data-readonly-allowed') === 'true'
+    ) {
+      if (el.getAttribute('data-hidden-readonly') === 'true') {
+        el.style.removeProperty('display');
+        el.removeAttribute('data-hidden-readonly');
+      }
+      el.disabled = false;
+      el.removeAttribute('disabled');
+      return;
+    }
+
     if (isInsideModalOrCloseControl(el)) {
       if (el.getAttribute('data-hidden-readonly') === 'true') {
         el.style.removeProperty('display');
@@ -4950,7 +4964,19 @@ function applyReadOnlyRestrictions() {
   });
 
   document.querySelectorAll('input, select, textarea').forEach(ctrl => {
-    if (ctrl.closest('#league-admin-floating-bar')) return;
+    if (
+      ctrl.closest('#league-admin-floating-bar') ||
+      ctrl.closest('#versusInPlayersTabSection') ||
+      ctrl.closest('[data-readonly-allowed="true"]') ||
+      ctrl.getAttribute('data-readonly-allowed') === 'true'
+    ) {
+      ctrl.disabled = false;
+      ctrl.removeAttribute('disabled');
+      ctrl.removeAttribute('readonly');
+      delete ctrl.dataset.disabledByPublic;
+      return;
+    }
+
     const id = (ctrl.id || '').toLowerCase();
     const isSearchOrFilter =
       id.includes('search') ||
@@ -4959,7 +4985,8 @@ function applyReadOnlyRestrictions() {
       id.includes('round') ||
       id.includes('category') ||
       id.includes('season') ||
-      id.includes('zone');
+      id.includes('zone') ||
+      id.includes('versus');
 
     if (!isSearchOrFilter && !ctrl.disabled) {
       ctrl.disabled = true;
@@ -4967,6 +4994,7 @@ function applyReadOnlyRestrictions() {
     }
   });
 }
+
 
 if (!window.__publicReadonlyClickGuardBound) {
   window.__publicReadonlyClickGuardBound = true;
@@ -5278,5 +5306,2041 @@ setTimeout(() => {
   applyReadOnlyRestrictions();
   renderAdminFloatingBar();
 }, 250);
+
+/* ==========================================================================
+   BUSCADOR DE PAREJA O JUGADOR EN FIXTURE Y FECHAS (VERSIÓN COMPLETA)
+   ========================================================================== */
+
+window.__fixtureTrackerMode = window.__fixtureTrackerMode || 'PAIR'; // 'PAIR' | 'PLAYER'
+window.__fixtureSelectedId = window.__fixtureSelectedId || 'ALL';
+window.__fixtureSearchText = window.__fixtureSearchText || '';
+window.__fixtureDropdownOpen = false;
+window.__fixtureBuiltKey = '';
+
+function getActiveCategoryForFixtureSearch() {
+  if (typeof getActiveCategory === 'function') {
+    const c = getActiveCategory();
+    if (c) return c;
+  }
+  const cats = typeof getDisplayedCategories === 'function'
+    ? getDisplayedCategories()
+    : (Array.isArray(state?.categories) ? state.categories : []);
+  return cats.find(c => c.id === state?.activeCategoryId) || cats[0] || null;
+}
+
+function getSidePlayerIdsForFixture(cat, match, side = 'A') {
+  if (!match) return [];
+  const explicit = side === 'A' ? match.playersA : match.playersB;
+  if (Array.isArray(explicit) && explicit.filter(Boolean).length > 0) {
+    return explicit.filter(Boolean);
+  }
+  const teamId = side === 'A' ? match.teamAId : match.teamBId;
+  const team = (cat?.teams || []).find(t => t.id === teamId);
+  if (!team) return [];
+  return [team.player1Id, team.player2Id].filter(Boolean);
+}
+
+function getCategoryPlayersList(cat) {
+  const allPlayers = Array.isArray(state?.players) ? state.players : [];
+  const idsInCat = new Set();
+
+  (cat?.teams || []).forEach(t => {
+    if (t.player1Id) idsInCat.add(t.player1Id);
+    if (t.player2Id) idsInCat.add(t.player2Id);
+  });
+
+  (cat?.matches || []).forEach(m => {
+    getSidePlayerIdsForFixture(cat, m, 'A').forEach(id => idsInCat.add(id));
+    getSidePlayerIdsForFixture(cat, m, 'B').forEach(id => idsInCat.add(id));
+  });
+
+  const filtered = allPlayers.filter(p => idsInCat.has(p.id));
+  const pool = filtered.length > 0 ? filtered : allPlayers;
+  return pool.slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+}
+
+function describeFixtureMatchScore(match, flipSide = false) {
+  if (!match) return 'Por jugar';
+  if (match.woAbsent) {
+    const absentSide = String(match.woAbsent).toUpperCase();
+    return `W.O. (Ausente ${absentSide})`;
+  }
+  const sets = typeof extractMatchSetsList === 'function' ? extractMatchSetsList(match) : (match.sets || []);
+  if (Array.isArray(sets) && sets.length > 0) {
+    return sets
+      .map(s => {
+        const rawA = Array.isArray(s) ? s[0] : s.a;
+        const rawB = Array.isArray(s) ? s[1] : s.b;
+        return flipSide ? `${rawB}-${rawA}` : `${rawA}-${rawB}`;
+      })
+      .join(' · ');
+  }
+  if (match.delayed) return 'Retrasado';
+  return 'Por jugar';
+}
+
+
+function isOnFixtureAndDatesTab() {
+  if (document.getElementById('twoGroupsFixturePanel')) {
+    return true;
+  }
+
+  // Verifica si existe algún encabezado o pestaña visible de "Fixture y Fechas"
+  const activeNavOrTabs = Array.from(
+    document.querySelectorAll('button, a, [role="tab"], h1, h2, h3, h4, div, span')
+  ).filter(el => {
+    if (el.closest('#fixturePairOrPlayerPanel')) return false;
+    const txt = (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!txt.includes('fixture y fechas')) return false;
+
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    const visible = style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    if (!visible) return false;
+
+    const cls = String(el.className || '').toLowerCase();
+    const ariaSelected = el.getAttribute('aria-selected') === 'true';
+    const dataActive = el.getAttribute('data-active') === 'true' || el.getAttribute('data-state') === 'active';
+    const looksActive =
+      ariaSelected ||
+      dataActive ||
+      cls.includes('active') ||
+      cls.includes('bg-slate-900') ||
+      cls.includes('bg-indigo') ||
+      cls.includes('border-indigo') ||
+      el.tagName === 'H1' ||
+      el.tagName === 'H2' ||
+      el.tagName === 'H3';
+
+    return looksActive;
+  });
+
+  if (activeNavOrTabs.length > 0) {
+    return true;
+  }
+
+  // Verifica si están visibles los botones de filtro por fecha ("Todas las Fechas" o "Fecha 1")
+  const dateFilterBtns = Array.from(document.querySelectorAll('button')).filter(b => {
+    if (b.closest('#fixturePairOrPlayerPanel')) return false;
+    const t = (b.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const rect = b.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 && (t === 'todas las fechas' || /^fecha\s+\d+$/.test(t));
+  });
+
+  return dateFilterBtns.length >= 2;
+}
+
+function findFixtureListContainer() {
+  const twoGroupsFixture = document.getElementById('twoGroupsFixturePanel');
+  if (twoGroupsFixture && twoGroupsFixture.parentElement) {
+    return { insertBeforeEl: twoGroupsFixture, parent: twoGroupsFixture.parentElement, cards: [] };
+  }
+
+  const allCards = Array.from(document.querySelectorAll('div, article, li')).filter(el => {
+    if (el.closest('#fixturePairOrPlayerPanel, #twoGroupsStandingsPanel, nav, header')) return false;
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    if (style.display === 'none' || style.visibility === 'hidden' || rect.width === 0 || rect.height === 0) {
+      return false;
+    }
+    const raw = (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const hasFecha = /\bfecha\s+\d+\b/.test(raw);
+    const hasCancha = /\bcancha\s+\d+\b/.test(raw);
+    const hasEstado = raw.includes('finalizado') || raw.includes('pendiente') || raw.includes('retrasado');
+    return hasFecha && hasCancha && hasEstado && el.children.length >= 2 && el.children.length <= 12;
+  });
+
+  const leafCards = allCards.filter(card => !allCards.some(other => other !== card && card.contains(other)));
+
+  if (leafCards.length > 0) {
+    const firstCard = leafCards[0];
+    let gridContainer = firstCard.parentElement;
+    for (let i = 0; i < 3 && gridContainer?.parentElement; i++) {
+      const countInside = leafCards.filter(c => gridContainer.contains(c)).length;
+      if (countInside >= Math.min(2, leafCards.length)) {
+        break;
+      }
+      gridContainer = gridContainer.parentElement;
+    }
+
+    if (gridContainer && gridContainer.parentElement) {
+      return {
+        insertBeforeEl: gridContainer,
+        parent: gridContainer.parentElement,
+        cards: leafCards
+      };
+    }
+  }
+
+  return null;
+}
+
+function applyFixtureCardsFilter(cards, cat, mode, selectedPair, selectedPlayer, searchLower) {
+  if (!Array.isArray(cards) || !cards.length) return;
+
+  const activeFilter = Boolean(selectedPair || selectedPlayer || searchLower);
+  const allPlayers = Array.isArray(state?.players) ? state.players : [];
+
+  const pairNames = selectedPair
+    ? [
+        getTeamDisplayName(cat, selectedPair.id, ''),
+        allPlayers.find(p => p.id === selectedPair.player1Id)?.name || '',
+        allPlayers.find(p => p.id === selectedPair.player2Id)?.name || ''
+      ]
+        .map(s => String(s || '').trim().toLowerCase())
+        .filter(Boolean)
+    : [];
+
+  const playerNeedle = selectedPlayer
+    ? String(selectedPlayer.name || '').trim().toLowerCase()
+    : searchLower;
+
+  cards.forEach(card => {
+    if (!activeFilter) {
+      card.style.removeProperty('display');
+      return;
+    }
+
+    const cardText = String(card.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+    let matches = false;
+    if (mode === 'PAIR' && selectedPair) {
+      const teamLabel = getTeamDisplayName(cat, selectedPair.id, '').trim().toLowerCase();
+      matches =
+        (teamLabel && cardText.includes(teamLabel)) ||
+        pairNames.some(part => part.length >= 3 && cardText.includes(part));
+    } else if (mode === 'PLAYER' && playerNeedle) {
+      matches = cardText.includes(playerNeedle);
+    } else if (searchLower) {
+      matches = cardText.includes(searchLower);
+    }
+
+    card.style.display = matches ? '' : 'none';
+  });
+}
+
+function buildTrackerResultsHtml(cat, mode, selectedPair, selectedPlayer, searchText) {
+  const allPlayers = Array.isArray(state?.players) ? state.players : [];
+
+  if (mode === 'PAIR' && selectedPair) {
+    const pairName = getTeamDisplayName(cat, selectedPair.id, 'Pareja');
+    const pairMatches = (cat.matches || [])
+      .filter(m => m.teamAId === selectedPair.id || m.teamBId === selectedPair.id)
+      .sort((a, b) => (Number(a.round) || 1) - (Number(b.round) || 1));
+
+    const played = pairMatches.filter(m =>
+      typeof matchHasRecordedResult === 'function' ? matchHasRecordedResult(m) : Boolean(m.played)
+    );
+    const pending = pairMatches.filter(m => !played.includes(m));
+
+    const renderCard = (m, isPlayed) => {
+      const isA = m.teamAId === selectedPair.id;
+      const rivalId = isA ? m.teamBId : m.teamAId;
+      const rivalName = getTeamDisplayName(cat, rivalId, 'Por definir');
+      const roundTxt = m.dateLabel || `Fecha ${m.round || 1}`;
+      const zoneTxt = (m.group || m.zone) ? ` · ${m.group || m.zone}` : '';
+      const schedTxt = [m.court, m.time].filter(Boolean).join(' · ');
+      const scoreTxt = describeFixtureMatchScore(m, !isA);
+
+
+      let statusBadge = `<span class="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-amber-100 text-amber-800">Por jugar</span>`;
+      if (isPlayed) {
+        const sets = typeof extractMatchSetsList === 'function' ? extractMatchSetsList(m) : (m.sets || []);
+        let won = false;
+        if (m.woAbsent) {
+          const absent = String(m.woAbsent).toUpperCase();
+          won = (isA && absent === 'B') || (!isA && absent === 'A');
+        } else if (sets.length > 0 && typeof evaluateMatch === 'function') {
+          won = evaluateMatch(sets, m.teamAId, m.teamBId).winnerId === selectedPair.id;
+        }
+        statusBadge = won
+          ? `<span class="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-emerald-100 text-emerald-800">Ganado</span>`
+          : `<span class="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-rose-100 text-rose-700">Perdido</span>`;
+      }
+
+      return `
+        <div class="p-2.5 rounded-xl border border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs">
+          <div class="space-y-0.5">
+            <div class="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500 font-semibold">
+              <span class="px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-bold">${roundTxt}${zoneTxt}</span>
+              ${schedTxt ? `<span>${schedTxt}</span>` : ''}
+            </div>
+            <div class="font-extrabold text-slate-900">
+              ${pairName} <span class="text-slate-400 font-semibold">vs</span> ${rivalName}
+            </div>
+          </div>
+          <div class="flex items-center gap-2 self-end sm:self-center">
+            ${statusBadge}
+            <span class="font-extrabold text-slate-800">${scoreTxt}</span>
+          </div>
+        </div>
+      `;
+    };
+
+    return `
+      <div class="pt-3 mt-3 border-t border-slate-100 space-y-3">
+        <div class="text-xs font-extrabold text-slate-900">
+          Pareja: <span class="text-indigo-700">${pairName}</span>
+          <span class="text-slate-500 font-semibold ml-1">(${pairMatches.length} partidos · ${played.length} jugados · ${pending.length} por jugar)</span>
+        </div>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <div class="space-y-2">
+            <div class="text-[11px] font-extrabold uppercase tracking-wide text-emerald-700">✅ Partidos Jugados (${played.length})</div>
+            ${played.length
+              ? played.map(m => renderCard(m, true)).join('')
+              : `<div class="text-xs text-slate-400 p-3 rounded-xl border border-dashed border-slate-200 text-center">Sin partidos jugados aún.</div>`
+            }
+          </div>
+          <div class="space-y-2">
+            <div class="text-[11px] font-extrabold uppercase tracking-wide text-amber-700">⏳ Partidos Por Jugar (${pending.length})</div>
+            ${pending.length
+              ? pending.map(m => renderCard(m, false)).join('')
+              : `<div class="text-xs text-slate-400 p-3 rounded-xl border border-dashed border-slate-200 text-center">Sin partidos pendientes.</div>`
+            }
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  if (mode === 'PLAYER' && selectedPlayer) {
+    const playerName = selectedPlayer.name || 'Jugador';
+    const playerMatches = (cat.matches || [])
+      .filter(m => {
+        const pA = getSidePlayerIdsForFixture(cat, m, 'A');
+        const pB = getSidePlayerIdsForFixture(cat, m, 'B');
+        return pA.includes(selectedPlayer.id) || pB.includes(selectedPlayer.id);
+      })
+      .sort((a, b) => (Number(a.round) || 1) - (Number(b.round) || 1));
+
+    const played = playerMatches.filter(m =>
+      typeof matchHasRecordedResult === 'function' ? matchHasRecordedResult(m) : Boolean(m.played)
+    );
+    const pending = playerMatches.filter(m => !played.includes(m));
+
+    const renderPlayerCard = (m, isPlayed) => {
+      const pA = getSidePlayerIdsForFixture(cat, m, 'A');
+      const pB = getSidePlayerIdsForFixture(cat, m, 'B');
+      const isA = pA.includes(selectedPlayer.id);
+
+      const mySideIds = isA ? pA : pB;
+      const oppSideIds = isA ? pB : pA;
+
+      const partnerNames = mySideIds
+        .filter(id => id !== selectedPlayer.id)
+        .map(id => allPlayers.find(p => p.id === id)?.name)
+        .filter(Boolean);
+
+      const oppNames = oppSideIds
+        .map(id => allPlayers.find(p => p.id === id)?.name)
+        .filter(Boolean);
+
+      const myTeamLabel = partnerNames.length
+        ? `${playerName} / ${partnerNames.join(' / ')}`
+        : getTeamDisplayName(cat, isA ? m.teamAId : m.teamBId, playerName);
+      const oppTeamLabel = oppNames.length
+        ? oppNames.join(' / ')
+        : getTeamDisplayName(cat, isA ? m.teamBId : m.teamAId, 'Rivales');
+
+      const roundTxt = m.dateLabel || `Fecha ${m.round || 1}`;
+      const zoneTxt = (m.group || m.zone) ? ` · ${m.group || m.zone}` : '';
+      const schedTxt = [m.court, m.time].filter(Boolean).join(' · ');
+      const scoreTxt = describeFixtureMatchScore(m, !isA);
+
+
+      let statusBadge = `<span class="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-amber-100 text-amber-800">Por jugar</span>`;
+      if (isPlayed) {
+        const sets = typeof extractMatchSetsList === 'function' ? extractMatchSetsList(m) : (m.sets || []);
+        let won = false;
+        if (m.woAbsent) {
+          const absent = String(m.woAbsent).toUpperCase();
+          won = (isA && absent === 'B') || (!isA && absent === 'A');
+        } else if (sets.length > 0 && typeof evaluateMatch === 'function') {
+          won = evaluateMatch(sets, m.teamAId, m.teamBId).winnerId === (isA ? m.teamAId : m.teamBId);
+        }
+        statusBadge = won
+          ? `<span class="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-emerald-100 text-emerald-800">Ganado</span>`
+          : `<span class="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-rose-100 text-rose-700">Perdido</span>`;
+      }
+
+      return `
+        <div class="p-2.5 rounded-xl border border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs">
+          <div class="space-y-0.5">
+            <div class="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500 font-semibold">
+              <span class="px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-bold">${roundTxt}${zoneTxt}</span>
+              ${schedTxt ? `<span>${schedTxt}</span>` : ''}
+            </div>
+            <div class="font-extrabold text-slate-900">
+              ${myTeamLabel} <span class="text-slate-400 font-semibold">vs</span> ${oppTeamLabel}
+            </div>
+          </div>
+          <div class="flex items-center gap-2 self-end sm:self-center">
+            ${statusBadge}
+            <span class="font-extrabold text-slate-800">${scoreTxt}</span>
+          </div>
+        </div>
+      `;
+    };
+
+    return `
+      <div class="pt-3 mt-3 border-t border-slate-100 space-y-3">
+        <div class="text-xs font-extrabold text-slate-900">
+          Jugador: <span class="text-indigo-700">${playerName}</span>
+          <span class="text-slate-500 font-semibold ml-1">(${playerMatches.length} partidos · ${played.length} jugados · ${pending.length} por jugar)</span>
+        </div>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <div class="space-y-2">
+            <div class="text-[11px] font-extrabold uppercase tracking-wide text-emerald-700">✅ Partidos Jugados (${played.length})</div>
+            ${played.length
+              ? played.map(m => renderPlayerCard(m, true)).join('')
+              : `<div class="text-xs text-slate-400 p-3 rounded-xl border border-dashed border-slate-200 text-center">Sin partidos jugados aún.</div>`
+            }
+          </div>
+          <div class="space-y-2">
+            <div class="text-[11px] font-extrabold uppercase tracking-wide text-amber-700">⏳ Partidos Por Jugar (${pending.length})</div>
+            ${pending.length
+              ? pending.map(m => renderPlayerCard(m, false)).join('')
+              : `<div class="text-xs text-slate-400 p-3 rounded-xl border border-dashed border-slate-200 text-center">Sin partidos pendientes.</div>`
+            }
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  if (searchText) {
+    return `
+      <div class="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-2.5">
+        No se encontró ${mode === 'PLAYER' ? 'ningún jugador' : 'ninguna pareja'} que coincida con "<strong>${searchText}</strong>" en ${cat.name}.
+      </div>
+    `;
+  }
+
+  return '';
+}
+
+function renderCustomDropdownMenu(panel, cat, mode, teams, catPlayers) {
+  const menu = panel.querySelector('#fixtureTrackerMenu');
+  const btnLabel = panel.querySelector('#fixtureTrackerBtnLabel');
+  if (!menu || !btnLabel) return;
+
+  const placeholder = mode === 'PLAYER' ? 'Seleccionar jugador...' : 'Seleccionar pareja...';
+  const filterText = String(window.__fixtureSearchText || '').trim().toLowerCase();
+
+  let currentLabel = placeholder;
+  if (mode === 'PAIR' && window.__fixtureSelectedId && window.__fixtureSelectedId !== 'ALL') {
+    const t = teams.find(x => x.id === window.__fixtureSelectedId);
+    if (t) currentLabel = getTeamDisplayName(cat, t.id, 'Pareja');
+  } else if (mode === 'PLAYER' && window.__fixtureSelectedId && window.__fixtureSelectedId !== 'ALL') {
+    const p = catPlayers.find(x => x.id === window.__fixtureSelectedId);
+    if (p) currentLabel = p.name;
+  }
+  btnLabel.textContent = currentLabel;
+
+  if (!window.__fixtureDropdownOpen) {
+    menu.style.display = 'none';
+    menu.innerHTML = '';
+    return;
+  }
+
+  const options = mode === 'PLAYER'
+    ? catPlayers
+        .filter(p => !filterText || String(p.name || '').toLowerCase().includes(filterText))
+        .map(p => ({ id: p.id, label: p.name || 'Jugador' }))
+    : teams
+        .filter(t => {
+          const lbl = getTeamDisplayName(cat, t.id, 'Pareja');
+          return !filterText || lbl.toLowerCase().includes(filterText);
+        })
+        .map(t => ({ id: t.id, label: getTeamDisplayName(cat, t.id, 'Pareja') }));
+
+  menu.style.display = 'block';
+  menu.innerHTML = `
+    <div class="max-h-60 overflow-y-auto divide-y divide-slate-100">
+      <button type="button" data-opt-id="ALL" class="w-full text-left px-3 py-2 text-xs font-bold text-slate-500 hover:bg-slate-50 cursor-pointer">
+        ${placeholder} (Todos)
+      </button>
+      ${options.length
+        ? options.map(opt => {
+            const active = window.__fixtureSelectedId === opt.id;
+            return `
+              <button type="button" data-opt-id="${opt.id}" class="w-full text-left px-3 py-2 text-xs font-bold cursor-pointer ${active ? 'bg-indigo-50 text-indigo-700' : 'text-slate-800 hover:bg-slate-50'}">
+                ${opt.label}
+              </button>
+            `;
+          }).join('')
+        : `<div class="px-3 py-2.5 text-xs text-slate-400 text-center">Sin opciones coincidentes</div>`
+      }
+    </div>
+  `;
+
+  menu.querySelectorAll('button[data-opt-id]').forEach(optBtn => {
+    optBtn.addEventListener('mousedown', (e) => e.stopPropagation());
+    optBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const val = optBtn.getAttribute('data-opt-id') || 'ALL';
+      window.__fixtureSelectedId = val;
+      if (val !== 'ALL') {
+        window.__fixtureSearchText = '';
+        const inp = panel.querySelector('#fixtureSearchTextInput');
+        if (inp) inp.value = '';
+      }
+      window.__fixtureDropdownOpen = false;
+      syncTrackerResultsOnly(cat, teams, catPlayers);
+    });
+  });
+}
+
+function syncTrackerResultsOnly(cat, teams, catPlayers) {
+  const panel = document.getElementById('fixturePairOrPlayerPanel');
+  if (!panel) return;
+
+  const mode = window.__fixtureTrackerMode === 'PLAYER' ? 'PLAYER' : 'PAIR';
+  const searchText = String(window.__fixtureSearchText || '').trim();
+  const searchLower = searchText.toLowerCase();
+
+  let selectedPair = null;
+  let selectedPlayer = null;
+
+  if (mode === 'PAIR') {
+    if (window.__fixtureSelectedId && window.__fixtureSelectedId !== 'ALL') {
+      selectedPair = teams.find(t => t.id === window.__fixtureSelectedId) || null;
+    } else if (searchLower) {
+      selectedPair =
+        teams.find(t => getTeamDisplayName(cat, t.id, '').toLowerCase().includes(searchLower)) || null;
+    }
+  } else {
+    if (window.__fixtureSelectedId && window.__fixtureSelectedId !== 'ALL') {
+      selectedPlayer = catPlayers.find(p => p.id === window.__fixtureSelectedId) || null;
+    } else if (searchLower) {
+      selectedPlayer =
+        catPlayers.find(p => String(p.name || '').toLowerCase().includes(searchLower)) || null;
+    }
+  }
+
+  renderCustomDropdownMenu(panel, cat, mode, teams, catPlayers);
+
+  const clearBtn = panel.querySelector('#clearFixtureTrackerBtn');
+  const hasFilter = Boolean(selectedPair || selectedPlayer || searchText);
+  if (clearBtn) {
+    clearBtn.disabled = !hasFilter;
+    clearBtn.style.opacity = hasFilter ? '1' : '0.45';
+    clearBtn.style.pointerEvents = hasFilter ? 'auto' : 'none';
+  }
+
+  const resultsBox = panel.querySelector('#fixtureTrackerResults');
+  if (resultsBox) {
+    resultsBox.innerHTML = buildTrackerResultsHtml(cat, mode, selectedPair, selectedPlayer, searchText);
+  }
+
+  const loc = findFixtureListContainer();
+  if (loc?.cards) {
+    applyFixtureCardsFilter(loc.cards, cat, mode, selectedPair, selectedPlayer, searchLower);
+  }
+}
+
+function renderFixturePairOrPlayerPanel() {
+  const cat = getActiveCategoryForFixtureSearch();
+  const existing = document.getElementById('fixturePairOrPlayerPanel');
+  const onFixtureTab = isOnFixtureAndDatesTab();
+  const loc = onFixtureTab ? findFixtureListContainer() : null;
+
+  if (!onFixtureTab || !cat || !loc || !loc.parent || !loc.insertBeforeEl) {
+    if (existing) {
+      existing.remove();
+      window.__fixtureBuiltKey = '';
+      window.__fixtureDropdownOpen = false;
+    }
+    return;
+  }
+
+  const mode = window.__fixtureTrackerMode === 'PLAYER' ? 'PLAYER' : 'PAIR';
+  const teams = (Array.isArray(cat.teams) ? cat.teams : [])
+    .slice()
+    .sort((a, b) => getTeamDisplayName(cat, a.id, '').localeCompare(getTeamDisplayName(cat, b.id, '')));
+  const catPlayers = getCategoryPlayersList(cat);
+
+  const builtKey = `${cat.id}__${mode}__${teams.length}__${catPlayers.length}`;
+
+  let panel = existing;
+  if (!panel || window.__fixtureBuiltKey !== builtKey) {
+    if (!panel) {
+      panel = document.createElement('section');
+      panel.id = 'fixturePairOrPlayerPanel';
+      panel.className = 'w-full mb-4 bg-white rounded-2xl border border-slate-200 shadow-sm p-4 relative z-20';
+      panel.style.overflowAnchor = 'none';
+    }
+
+    const searchText = String(window.__fixtureSearchText || '');
+    const initialPlaceholder = mode === 'PLAYER' ? 'Seleccionar jugador...' : 'Seleccionar pareja...';
+
+    panel.innerHTML = `
+      <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+        <div class="min-w-0">
+          <h4 class="text-sm font-extrabold text-slate-900">🔎 Buscar Partidos por Pareja o Jugador · ${cat.name}</h4>
+          <p class="text-[11px] text-slate-500">Consulta todos los encuentros jugados y pendientes de una pareja o de un jugador en esta categoría.</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2 shrink-0">
+          <div class="inline-flex rounded-xl border border-slate-300 overflow-hidden text-xs font-bold shrink-0">
+            <button type="button" id="trackerModePairBtn" class="px-3 py-1.5 cursor-pointer whitespace-nowrap ${mode === 'PAIR' ? 'bg-slate-900 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'}">
+              Pareja
+            </button>
+            <button type="button" id="trackerModePlayerBtn" class="px-3 py-1.5 cursor-pointer whitespace-nowrap ${mode === 'PLAYER' ? 'bg-slate-900 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'}">
+              Jugador
+            </button>
+          </div>
+
+          <div class="relative w-56" id="fixtureTrackerDropdownWrap">
+            <button
+              type="button"
+              id="fixtureTrackerDropdownBtn"
+              class="w-full flex items-center justify-between gap-2 border border-slate-300 rounded-xl px-3 py-1.5 text-xs font-bold bg-white text-slate-800 hover:bg-slate-50 cursor-pointer"
+            >
+              <span id="fixtureTrackerBtnLabel" class="truncate">${initialPlaceholder}</span>
+              <span class="text-slate-400 text-[10px] shrink-0">▼</span>
+            </button>
+            <div
+              id="fixtureTrackerMenu"
+              class="hidden absolute left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden"
+            ></div>
+          </div>
+
+          <input
+            type="text"
+            id="fixtureSearchTextInput"
+            value="${searchText.replace(/"/g, '&quot;')}"
+            placeholder="${mode === 'PLAYER' ? 'Buscar jugador...' : 'Buscar pareja...'}"
+            class="border border-slate-300 rounded-xl px-3 py-1.5 text-xs font-semibold bg-white text-slate-800 w-44 sm:w-52"
+          >
+
+          <button type="button" id="clearFixtureTrackerBtn" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer whitespace-nowrap">
+            Limpiar
+          </button>
+        </div>
+      </div>
+      <div id="fixtureTrackerResults"></div>
+    `;
+
+    const wrapEl = panel.querySelector('#fixtureTrackerDropdownWrap');
+    const ddBtn = panel.querySelector('#fixtureTrackerDropdownBtn');
+
+    wrapEl.addEventListener('mousedown', (e) => e.stopPropagation());
+    wrapEl.addEventListener('click', (e) => e.stopPropagation());
+
+    ddBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      window.__fixtureDropdownOpen = !window.__fixtureDropdownOpen;
+      syncTrackerResultsOnly(cat, teams, catPlayers);
+    });
+
+    panel.querySelector('#trackerModePairBtn').onclick = (e) => {
+      e.stopPropagation();
+      window.__fixtureTrackerMode = 'PAIR';
+      window.__fixtureSelectedId = 'ALL';
+      window.__fixtureSearchText = '';
+      window.__fixtureDropdownOpen = false;
+      const inp = panel.querySelector('#fixtureSearchTextInput');
+      if (inp) inp.value = '';
+      renderFixturePairOrPlayerPanel();
+    };
+
+    panel.querySelector('#trackerModePlayerBtn').onclick = (e) => {
+      e.stopPropagation();
+      window.__fixtureTrackerMode = 'PLAYER';
+      window.__fixtureSelectedId = 'ALL';
+      window.__fixtureSearchText = '';
+      window.__fixtureDropdownOpen = false;
+      const inp = panel.querySelector('#fixtureSearchTextInput');
+      if (inp) inp.value = '';
+      renderFixturePairOrPlayerPanel();
+    };
+
+    panel.querySelector('#fixtureSearchTextInput').oninput = (e) => {
+      window.__fixtureSearchText = e.target.value;
+      window.__fixtureSelectedId = 'ALL';
+      syncTrackerResultsOnly(cat, teams, catPlayers);
+    };
+
+    panel.querySelector('#clearFixtureTrackerBtn').onclick = (e) => {
+      e.stopPropagation();
+      window.__fixtureSelectedId = 'ALL';
+      window.__fixtureSearchText = '';
+      window.__fixtureDropdownOpen = false;
+      const inp = panel.querySelector('#fixtureSearchTextInput');
+      if (inp) inp.value = '';
+      syncTrackerResultsOnly(cat, teams, catPlayers);
+    };
+
+    window.__fixtureBuiltKey = builtKey;
+  }
+
+  if (loc.insertBeforeEl.previousElementSibling !== panel) {
+    loc.parent.insertBefore(panel, loc.insertBeforeEl);
+  }
+
+  syncTrackerResultsOnly(cat, teams, catPlayers);
+}
+
+document.addEventListener('click', () => {
+  if (window.__fixtureDropdownOpen) {
+    window.__fixtureDropdownOpen = false;
+    const menu = document.getElementById('fixtureTrackerMenu');
+    if (menu) {
+      menu.style.display = 'none';
+      menu.innerHTML = '';
+    }
+  }
+});
+
+const __prevPostRenderFixtureTracker = typeof runPostRenderEnhancements === 'function' ? runPostRenderEnhancements : null;
+runPostRenderEnhancements = function (...args) {
+  const res = __prevPostRenderFixtureTracker ? __prevPostRenderFixtureTracker.apply(this, args) : undefined;
+  setTimeout(() => {
+    renderFixturePairOrPlayerPanel();
+  }, 50);
+  return res;
+};
+
+/* ==========================================================================
+   SECCIÓN "VERSUS" DENTRO DE "JUGADORES Y PERFILES"
+   (BAJO LA INSCRIPCIÓN INDIVIDUAL AL POOL + BUSCADOR POR TEXTO REAL)
+   ========================================================================== */
+
+window.__versusP1Id = window.__versusP1Id || '';
+window.__versusP2Id = window.__versusP2Id || '';
+window.__versusP1Query = window.__versusP1Query || '';
+window.__versusP2Query = window.__versusP2Query || '';
+window.__versusOpenPicker = window.__versusOpenPicker || null;
+
+function getMatchTeamAId(match) {
+  return match?.teamA ?? match?.teamAId ?? null;
+}
+
+function getMatchTeamBId(match) {
+  return match?.teamB ?? match?.teamBId ?? null;
+}
+
+function isPlayoffMatchRecord(match) {
+  if (!match) return false;
+  const stageStr = String(
+    match.stage || match.phase || match.roundName || match.bracketRound || match.type || match.mode || ''
+  ).toLowerCase();
+  return Boolean(
+    match.isPlayoff ||
+    match.playoff ||
+    match._fromPlayoffs ||
+    stageStr.includes('playoff') ||
+    stageStr.includes('cuarto') ||
+    stageStr.includes('semi') ||
+    stageStr.includes('final') ||
+    stageStr.includes('octavo') ||
+    stageStr.includes('llave') ||
+    stageStr.includes('qf') ||
+    stageStr.includes('sf')
+  );
+}
+
+function resolveDirectWinnerSide(cat, match, sideAIds = [], sideBIds = []) {
+  if (!match) return null;
+
+  const teamAId = getMatchTeamAId(match);
+  const teamBId = getMatchTeamBId(match);
+
+  const explicitSide = String(match.winnerSide || match.winSide || '').toUpperCase();
+  if (explicitSide === 'A' || explicitSide === 'B') return explicitSide;
+
+  const winVal = match.winner ?? match.winnerId ?? match.winnerTeamId ?? match.advanceTeamId ?? match.advanceId;
+  if (winVal != null && winVal !== '') {
+    const winStr = String(winVal);
+    if (teamAId != null && String(teamAId) === winStr) return 'A';
+    if (teamBId != null && String(teamBId) === winStr) return 'B';
+
+    if (sideAIds.includes(winStr)) return 'A';
+    if (sideBIds.includes(winStr)) return 'B';
+
+    const lowerWin = winStr.trim().toLowerCase();
+    const nameA = typeof getTeamDisplayName === 'function' && teamAId
+      ? String(getTeamDisplayName(cat, teamAId, '')).trim().toLowerCase()
+      : '';
+    const nameB = typeof getTeamDisplayName === 'function' && teamBId
+      ? String(getTeamDisplayName(cat, teamBId, '')).trim().toLowerCase()
+      : '';
+    if (nameA && lowerWin === nameA) return 'A';
+    if (nameB && lowerWin === nameB) return 'B';
+  }
+
+  const winPlayers = match.winnerPlayerIds || match.winners;
+  if (Array.isArray(winPlayers) && winPlayers.length > 0) {
+    const winSet = new Set(winPlayers.map(String));
+    if (sideAIds.some(pid => winSet.has(pid))) return 'A';
+    if (sideBIds.some(pid => winSet.has(pid))) return 'B';
+  }
+
+  if (match.woAbsent) {
+    const abs = String(match.woAbsent).toUpperCase();
+    return abs === 'A' ? 'B' : 'A';
+  }
+
+  const sets = typeof extractMatchSetsList === 'function' ? extractMatchSetsList(match) : (match.sets || []);
+  if (Array.isArray(sets) && sets.length > 0 && typeof evaluateMatch === 'function') {
+    const ev = evaluateMatch(sets, teamAId, teamBId);
+    if (ev && ev.winnerId != null) {
+      return String(ev.winnerId) === String(teamAId) ? 'A' : 'B';
+    }
+  }
+
+  return null;
+}
+
+function hasPlayoffOrRecordedOutcome(cat, match, sideAIds = [], sideBIds = []) {
+  if (!match) return false;
+  if (typeof matchHasRecordedResult === 'function' && matchHasRecordedResult(match)) return true;
+  if (match.played || match.completed || match.finished) return true;
+  const sets = typeof extractMatchSetsList === 'function' ? extractMatchSetsList(match) : (match.sets || []);
+  if (Array.isArray(sets) && sets.length > 0) return true;
+  if (match.woAbsent) return true;
+  return Boolean(resolveDirectWinnerSide(cat, match, sideAIds, sideBIds));
+}
+
+function collectCategoryMatchesIncludingPlayoffs(cat) {
+  const list = [];
+  const seen = new Set();
+
+  const addMatch = (m, forcePlayoff = false, slotLabel = '') => {
+    if (!m || typeof m !== 'object') return;
+    const copy = forcePlayoff ? Object.assign({}, m, { _fromPlayoffs: true }) : m;
+    if (slotLabel && !copy._playoffSlotLabel) {
+      copy._playoffSlotLabel = slotLabel;
+    }
+    if (slotLabel && !copy.dateLabel && !copy.roundName && !copy.stage) {
+      copy.dateLabel = `Playoffs · ${slotLabel}`;
+    }
+    const key = copy.id
+      ? `id:${copy.id}`
+      : `slot:${slotLabel}:${getMatchTeamAId(copy) || ''}:${getMatchTeamBId(copy) || ''}:${copy.round || ''}:${list.length}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    list.push(copy);
+  };
+
+  (Array.isArray(cat?.matches) ? cat.matches : []).forEach(m => addMatch(m, false));
+
+  if (cat?.playoffs && typeof cat.playoffs === 'object') {
+    Object.entries(cat.playoffs).forEach(([slotKey, slotVal]) => {
+      if (slotKey === 'mode' || !slotVal || typeof slotVal !== 'object') return;
+
+      if (Array.isArray(slotVal.matches)) {
+        slotVal.matches.forEach(m => addMatch(m, true, slotVal.name || slotKey.toUpperCase()));
+        return;
+      }
+
+      if (
+        getMatchTeamAId(slotVal) ||
+        getMatchTeamBId(slotVal) ||
+        (Array.isArray(slotVal.playersA) && slotVal.playersA.length) ||
+        (Array.isArray(slotVal.playersB) && slotVal.playersB.length) ||
+        slotVal.winner ||
+        slotVal.winnerId ||
+        slotVal.winnerTeamId
+      ) {
+        addMatch(slotVal, true, slotVal.stageName || slotVal.roundName || slotKey.toUpperCase());
+      }
+    });
+  }
+
+  return list;
+}
+
+function collectAllSeasonsVersusData() {
+  const seasons = [];
+  const seenKeys = new Set();
+
+  const pushSeason = (label, rawCats, rawPlayers) => {
+    const cats = Array.isArray(rawCats) ? rawCats : [];
+    const players = Array.isArray(rawPlayers) ? rawPlayers : [];
+    if (!cats.length && !players.length) return;
+    const key = `${String(label)}::${cats.map(c => c.id || c.name).join('|')}`;
+    if (seenKeys.has(key)) return;
+    seenKeys.add(key);
+    seasons.push({
+      seasonName: String(label || 'Temporada Actual'),
+      categories: cats,
+      players
+    });
+  };
+
+  const st = typeof state !== 'undefined' && state ? state : {};
+  const currentLabel =
+    st.seasonName ||
+    st.currentSeasonName ||
+    st.activeSeasonName ||
+    st.seasonTitle ||
+    st.seasonLabel ||
+    (st.season ? `Temporada ${st.season} (Actual)` : 'Temporada Actual');
+
+  const currentCats = typeof getDisplayedCategories === 'function'
+    ? getDisplayedCategories()
+    : (Array.isArray(st.categories) ? st.categories : []);
+  const currentPlayers = Array.isArray(st.players) ? st.players : [];
+
+  pushSeason(currentLabel, currentCats, currentPlayers);
+
+  if (Array.isArray(st.archivedSeasons)) {
+    st.archivedSeasons.forEach((arch, idx) => {
+      if (!arch || typeof arch !== 'object') return;
+      const lbl =
+        arch.seasonName ||
+        arch.name ||
+        arch.title ||
+        arch.label ||
+        (arch.season ? `Temporada ${arch.season}` : `Temporada Archivada ${idx + 1}`);
+      pushSeason(lbl, arch.categories || [], arch.players || currentPlayers);
+    });
+  }
+
+  try {
+    const rawLs = localStorage.getItem('padeltour_pro_v1');
+    if (rawLs) {
+      const parsedLs = JSON.parse(rawLs);
+      if (parsedLs && Array.isArray(parsedLs.archivedSeasons)) {
+        parsedLs.archivedSeasons.forEach((arch, idx) => {
+          if (!arch || typeof arch !== 'object') return;
+          const lbl =
+            arch.seasonName ||
+            arch.name ||
+            arch.title ||
+            (arch.season ? `Temporada ${arch.season}` : `Temporada Archivada ${idx + 1}`);
+          pushSeason(lbl, arch.categories || [], arch.players || currentPlayers);
+        });
+      }
+    }
+  } catch (_) {}
+
+  return seasons;
+}
+
+function getAllPlayersVersusList(seasons) {
+  const map = new Map();
+
+  if (typeof state !== 'undefined' && Array.isArray(state?.players)) {
+    state.players.forEach(p => {
+      if (p?.id) map.set(String(p.id), { id: String(p.id), name: p.name || 'Jugador' });
+    });
+  }
+
+  seasons.forEach(s => {
+    (s.players || []).forEach(p => {
+      if (p?.id && !map.has(String(p.id))) {
+        map.set(String(p.id), { id: String(p.id), name: p.name || 'Jugador' });
+      }
+    });
+    (s.categories || []).forEach(cat => {
+      (cat.teams || []).forEach(t => {
+        if (t.player1Id && !map.has(String(t.player1Id))) {
+          map.set(String(t.player1Id), { id: String(t.player1Id), name: t.player1Name || 'Jugador' });
+        }
+        if (t.player2Id && !map.has(String(t.player2Id))) {
+          map.set(String(t.player2Id), { id: String(t.player2Id), name: t.player2Name || 'Jugador' });
+        }
+      });
+    });
+  });
+
+  return Array.from(map.values()).sort((a, b) =>
+    String(a.name || '').localeCompare(String(b.name || ''))
+  );
+}
+
+function resolveSidePlayersForVersusPanel(cat, match, side = 'A') {
+  if (!match) return [];
+  const explicit = side === 'A' ? match.playersA : match.playersB;
+  if (Array.isArray(explicit) && explicit.filter(Boolean).length > 0) {
+    return explicit.filter(Boolean).map(String);
+  }
+  const teamId = side === 'A' ? getMatchTeamAId(match) : getMatchTeamBId(match);
+  const team = (cat?.teams || []).find(t => String(t.id) === String(teamId));
+  if (!team) return [];
+  return [team.player1Id, team.player2Id].filter(Boolean).map(String);
+}
+
+function resolvePairNameForVersusPanel(cat, match, side = 'A', playerIds = [], playersMap = new Map()) {
+  const teamId = side === 'A' ? getMatchTeamAId(match) : getMatchTeamBId(match);
+  if (typeof getTeamDisplayName === 'function' && teamId) {
+    const disp = getTeamDisplayName(cat, teamId, '');
+    if (disp && disp !== 'Por definir') return disp;
+  }
+  const names = (playerIds || [])
+    .map(pid => playersMap.get(String(pid))?.name)
+    .filter(Boolean);
+  return names.length ? names.join(' / ') : 'Pareja sin registro';
+}
+
+function formatVersusScoreOrDirectWin(match, flipSide = false, cat = null, sideAIds = [], sideBIds = []) {
+  if (!match) return 'Sin marcador';
+  if (match.woAbsent) {
+    const abs = String(match.woAbsent).toUpperCase();
+    return `W.O. (Ausente ${abs})`;
+  }
+  const sets = typeof extractMatchSetsList === 'function' ? extractMatchSetsList(match) : (match.sets || []);
+  if (Array.isArray(sets) && sets.length > 0) {
+    return sets
+      .map(s => {
+        const a = Array.isArray(s) ? s[0] : s.a;
+        const b = Array.isArray(s) ? s[1] : s.b;
+        return flipSide ? `${b}-${a}` : `${a}-${b}`;
+      })
+      .join(' · ');
+  }
+  if (resolveDirectWinnerSide(cat, match, sideAIds, sideBIds)) {
+    return isPlayoffMatchRecord(match) ? 'Ganador directo · Playoffs' : 'Ganador directo';
+  }
+  return 'Registrado';
+}
+
+function formatDateForVersusPanel(match) {
+  if (!match) return 'Fecha no registrada';
+  const roundStr = match.dateLabel || (match.round ? `Fecha ${match.round}` : '');
+  const exactDate = match.customDate || match.date || match.playedAt || '';
+  if (roundStr && exactDate && !String(roundStr).includes(String(exactDate))) {
+    return `${roundStr} (${exactDate})`;
+  }
+  return exactDate || roundStr || 'Fecha no registrada';
+}
+
+function findIndividualPoolEnrollmentAnchor() {
+  // Busca el encabezado o texto exacto de "Inscripción Individual al Pool de Jugadores"
+  const headingOrEl = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, p, div, span')).find(el => {
+    if (el.closest('#versusInPlayersTabSection')) return false;
+    const ownText = (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    return ownText.startsWith('inscripción individual al pool') || ownText.startsWith('inscripcion individual al pool');
+  });
+
+  if (!headingOrEl) return null;
+
+  // Sube hasta encontrar la tarjeta o contenedor principal del bloque de inscripción individual
+  let card = headingOrEl;
+  for (let i = 0; i < 6 && card && card.parentElement; i++) {
+    const parent = card.parentElement;
+    const parentText = (parent.textContent || '').toLowerCase();
+    // Si el padre ya contiene "ranking y pool de jugadores", nos quedamos con el hijo anterior (la tarjeta de inscripción)
+    if (parentText.includes('ranking y pool de jugadores')) {
+      break;
+    }
+    card = parent;
+  }
+
+  return card;
+}
+
+function mountVersusBelowIndividualEnrollment(sectionEl) {
+  const anchor = findIndividualPoolEnrollmentAnchor();
+  if (!anchor || !anchor.parentElement) return false;
+
+  if (anchor.nextSibling !== sectionEl) {
+    anchor.parentElement.insertBefore(sectionEl, anchor.nextSibling);
+  }
+  return true;
+}
+
+
+function updatePickerDropdownsOnly(allPlayers) {
+  const view = document.getElementById('versusInPlayersTabSection');
+  if (!view) return;
+
+  ['P1', 'P2'].forEach(which => {
+    const queryVal = which === 'P1' ? window.__versusP1Query : window.__versusP2Query;
+    const selectedId = which === 'P1' ? window.__versusP1Id : window.__versusP2Id;
+    const isOpen = window.__versusOpenPicker === which;
+    const dropdownHost = view.querySelector(`#versus${which}DropdownHost`);
+    if (!dropdownHost) return;
+
+    if (!isOpen) {
+      dropdownHost.innerHTML = '';
+      return;
+    }
+
+    const q = String(queryVal || '').trim().toLowerCase();
+    const matches = allPlayers.filter(p => !q || String(p.name || '').toLowerCase().includes(q));
+
+    dropdownHost.innerHTML = `
+      <div
+        id="versus${which}Dropdown"
+        class="absolute left-0 right-0 mt-1 max-h-56 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-xl z-50 divide-y divide-slate-100"
+      >
+        ${matches.length
+          ? matches.map(p => {
+              const active = String(p.id) === String(selectedId);
+              return `
+                <button
+                  type="button"
+                  data-pick-which="${which}"
+                  data-pick-id="${p.id}"
+                  data-pick-name="${String(p.name || '').replace(/"/g, '&quot;')}"
+                  class="w-full text-left px-3 py-2 text-xs font-bold cursor-pointer ${active ? 'bg-indigo-50 text-indigo-700' : 'text-slate-800 hover:bg-slate-50'}"
+                >
+                  ${p.name}
+                </button>
+              `;
+            }).join('')
+          : `<div class="px-3 py-2.5 text-xs text-slate-400 text-center">Sin jugadores que coincidan con "${queryVal}"</div>`
+        }
+      </div>
+    `;
+
+    dropdownHost.querySelectorAll('button[data-pick-id]').forEach(btn => {
+      btn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const w = btn.getAttribute('data-pick-which');
+        const pid = btn.getAttribute('data-pick-id') || '';
+        const pname = btn.getAttribute('data-pick-name') || '';
+
+        if (w === 'P1') {
+          window.__versusP1Id = pid;
+          window.__versusP1Query = pname;
+          const inp1 = view.querySelector('#versusP1Input');
+          if (inp1) inp1.value = pname;
+        } else {
+          window.__versusP2Id = pid;
+          window.__versusP2Query = pname;
+          const inp2 = view.querySelector('#versusP2Input');
+          if (inp2) inp2.value = pname;
+        }
+        window.__versusOpenPicker = null;
+        updatePickerDropdownsOnly(allPlayers);
+        renderVersusResultsBody(allPlayers);
+      });
+    });
+  });
+}
+
+function renderVersusResultsBody(allPlayers) {
+  const view = document.getElementById('versusInPlayersTabSection');
+  if (!view) return;
+  const body = view.querySelector('#versusContentBody');
+  if (!body) return;
+
+  const seasons = collectAllSeasonsVersusData();
+  const playersMap = new Map(allPlayers.map(p => [String(p.id), p]));
+
+  // Si el usuario escribió un nombre exacto sin hacer clic en la lista, lo resolvemos automáticamente
+  if (!window.__versusP1Id && window.__versusP1Query) {
+    const exact1 = allPlayers.find(p => String(p.name || '').trim().toLowerCase() === String(window.__versusP1Query).trim().toLowerCase());
+    if (exact1) window.__versusP1Id = exact1.id;
+  }
+  if (!window.__versusP2Id && window.__versusP2Query) {
+    const exact2 = allPlayers.find(p => String(p.name || '').trim().toLowerCase() === String(window.__versusP2Query).trim().toLowerCase());
+    if (exact2) window.__versusP2Id = exact2.id;
+  }
+
+  const id1 = String(window.__versusP1Id || '');
+  const id2 = String(window.__versusP2Id || '');
+
+  if (!id1 || !id2) {
+    body.innerHTML = `
+      <div class="rounded-2xl border-2 border-dashed border-indigo-200 bg-indigo-50/40 p-6 text-center space-y-1.5">
+        <div class="text-sm sm:text-base font-black text-slate-900">🎮 Escribe o elige Jugador 1 y Jugador 2</div>
+        <p class="text-xs text-slate-600">Compara su historial completo en fase regular y playoffs (con marcador o ganador directo) en todas las temporadas.</p>
+      </div>
+    `;
+    return;
+  }
+
+  if (id1 === id2) {
+    body.innerHTML = `
+      <div class="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-center text-xs font-bold text-amber-800">
+        Elige dos jugadores distintos para comparar su historial.
+      </div>
+    `;
+    return;
+  }
+
+  const name1 = playersMap.get(id1)?.name || window.__versusP1Query || 'Jugador 1';
+  const name2 = playersMap.get(id2)?.name || window.__versusP2Query || 'Jugador 2';
+
+  const encounters = [];
+  const seenMatches = new Set();
+
+  seasons.forEach((seasonObj, sIdx) => {
+    (seasonObj.categories || []).forEach(cat => {
+      const catMatches = collectCategoryMatchesIncludingPlayoffs(cat);
+      catMatches.forEach((m, mIdx) => {
+        const sideAIds = resolveSidePlayersForVersusPanel(cat, m, 'A');
+        const sideBIds = resolveSidePlayersForVersusPanel(cat, m, 'B');
+
+        if (!hasPlayoffOrRecordedOutcome(cat, m, sideAIds, sideBIds)) return;
+
+        const uniq = m.id
+          ? `${seasonObj.seasonName}::${cat.id || cat.name}::${m.id}`
+          : `${sIdx}::${cat.id || cat.name}::${m._playoffSlotLabel || 'reg'}::${mIdx}::${m.round || ''}`;
+        if (seenMatches.has(uniq)) return;
+
+        const p1InA = sideAIds.includes(id1);
+        const p1InB = sideBIds.includes(id1);
+        const p2InA = sideAIds.includes(id2);
+        const p2InB = sideBIds.includes(id2);
+
+        if (!(p1InA || p1InB) || !(p2InA || p2InB)) return;
+        seenMatches.add(uniq);
+
+        const sameSide = (p1InA && p2InA) || (p1InB && p2InB);
+        const p1Side = p1InA ? 'A' : 'B';
+        const p2Side = p2InA ? 'A' : 'B';
+
+        const pair1Name = resolvePairNameForVersusPanel(
+          cat,
+          m,
+          p1Side,
+          p1Side === 'A' ? sideAIds : sideBIds,
+          playersMap
+        );
+        const pair2Name = resolvePairNameForVersusPanel(
+          cat,
+          m,
+          p2Side,
+          p2Side === 'A' ? sideAIds : sideBIds,
+          playersMap
+        );
+
+        const isPlayoff = isPlayoffMatchRecord(m);
+        const winnerSide = resolveDirectWinnerSide(cat, m, sideAIds, sideBIds);
+
+        let winnerName = null;
+        let outcomeBadge = '';
+
+        if (sameSide) {
+          const wonTogether = winnerSide === p1Side;
+          outcomeBadge = wonTogether
+            ? `<span class="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-sky-100 text-sky-800">🤝 Misma pareja · Ganaron juntos</span>`
+            : `<span class="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-slate-200 text-slate-700">🤝 Misma pareja · Perdieron juntos</span>`;
+        } else if (winnerSide === p1Side) {
+          winnerName = name1;
+          outcomeBadge = `<span class="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-indigo-100 text-indigo-800">🏆 Ganó ${name1}</span>`;
+        } else if (winnerSide === p2Side) {
+          winnerName = name2;
+          outcomeBadge = `<span class="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-emerald-100 text-emerald-800">🏆 Ganó ${name2}</span>`;
+        } else {
+          outcomeBadge = `<span class="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-slate-100 text-slate-700">⚔️ Partido registrado</span>`;
+        }
+
+        encounters.push({
+          seasonName: seasonObj.seasonName,
+          seasonOrder: sIdx,
+          catName: cat.name || 'Categoría',
+          isPlayoff,
+          slotLabel: m._playoffSlotLabel ? String(m._playoffSlotLabel).toUpperCase() : '',
+          dateText: formatDateForVersusPanel(m),
+          roundNum: isPlayoff ? 9999 : (Number(m.round) || 1),
+          scoreText: formatVersusScoreOrDirectWin(m, p1Side !== 'A', cat, sideAIds, sideBIds),
+          sameSide,
+          winnerName,
+          outcomeBadge,
+          pair1Name,
+          pair2Name
+        });
+      });
+    });
+  });
+
+  encounters.sort((a, b) => {
+    if (a.seasonOrder !== b.seasonOrder) return a.seasonOrder - b.seasonOrder;
+    return b.roundNum - a.roundNum;
+  });
+
+  const rivalMatches = encounters.filter(e => !e.sameSide);
+  const wins1 = rivalMatches.filter(e => e.winnerName === name1).length;
+  const wins2 = rivalMatches.filter(e => e.winnerName === name2).length;
+  const totalDecided = wins1 + wins2;
+  const pct1 = totalDecided > 0 ? Math.round((wins1 / totalDecided) * 100) : 50;
+  const pct2 = totalDecided > 0 ? 100 - pct1 : 50;
+
+  let verdictText = `⚖️ Serie empatada (${wins1} - ${wins2})`;
+  if (wins1 > wins2) verdictText = `🔥 ${name1} domina (${wins1} vs ${wins2})`;
+  else if (wins2 > wins1) verdictText = `🔥 ${name2} domina (${wins2} vs ${wins1})`;
+
+  body.innerHTML = `
+    <div class="rounded-2xl bg-gradient-to-r from-indigo-950 via-slate-900 to-emerald-950 text-white p-4 sm:p-5 shadow-md space-y-4">
+      <div class="text-center space-y-1">
+        <span class="inline-block px-3 py-0.5 rounded-full text-[11px] font-extrabold uppercase tracking-wider bg-white/10 text-amber-300">
+          ${verdictText}
+        </span>
+        <div class="text-xs text-slate-300">
+          ${encounters.length} cruce(s) en ${seasons.length} temporada(s) · ${rivalMatches.length} duelo(s) directo(s)
+        </div>
+      </div>
+
+      <div class="grid grid-cols-3 items-center gap-2 text-center">
+        <div class="bg-white/10 rounded-2xl p-3 border border-white/10">
+          <div class="text-xs sm:text-sm font-extrabold text-indigo-200 truncate">${name1}</div>
+          <div class="text-3xl sm:text-4xl font-black text-white mt-1">${wins1}</div>
+          <div class="text-[10px] uppercase tracking-wider text-indigo-300 font-bold">Victorias</div>
+        </div>
+
+        <div class="space-y-1">
+          <div class="text-lg sm:text-2xl font-black tracking-widest text-amber-300">VS</div>
+          <div class="text-[11px] text-slate-300 font-semibold">${pct1}% · ${pct2}%</div>
+        </div>
+
+        <div class="bg-white/10 rounded-2xl p-3 border border-white/10">
+          <div class="text-xs sm:text-sm font-extrabold text-emerald-200 truncate">${name2}</div>
+          <div class="text-3xl sm:text-4xl font-black text-white mt-1">${wins2}</div>
+          <div class="text-[10px] uppercase tracking-wider text-emerald-300 font-bold">Victorias</div>
+        </div>
+      </div>
+
+      <div class="w-full h-3 rounded-full bg-white/15 overflow-hidden flex">
+        <div class="h-full bg-indigo-400 transition-all duration-300" style="width: ${pct1}%"></div>
+        <div class="h-full bg-emerald-400 transition-all duration-300" style="width: ${pct2}%"></div>
+      </div>
+    </div>
+
+    ${encounters.length
+      ? `<div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
+          ${encounters.map(enc => `
+            <div class="rounded-2xl border ${enc.isPlayoff ? 'border-amber-300 bg-amber-50/20' : 'border-slate-200 bg-white'} p-4 shadow-sm hover:border-indigo-300 transition flex flex-col justify-between gap-3">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <span class="px-2.5 py-0.5 rounded-lg text-[11px] font-extrabold bg-slate-900 text-white">
+                    🗓️ ${enc.seasonName}
+                  </span>
+                  <span class="px-2.5 py-0.5 rounded-lg text-[11px] font-bold bg-slate-100 text-slate-700">
+                    ${enc.catName}
+                  </span>
+                  ${enc.isPlayoff ? `
+                    <span class="px-2.5 py-0.5 rounded-lg text-[11px] font-extrabold bg-amber-100 text-amber-900">
+                      🏆 Playoffs${enc.slotLabel ? ` · ${enc.slotLabel}` : ''}
+                    </span>
+                  ` : `
+                    <span class="px-2.5 py-0.5 rounded-lg text-[11px] font-bold bg-indigo-50 text-indigo-700">
+                      📅 ${enc.dateText}
+                    </span>
+                  `}
+                </div>
+                <span class="px-3 py-1 rounded-xl text-xs font-black bg-slate-900 text-amber-300">
+                  ${enc.scoreText}
+                </span>
+              </div>
+
+              <div>
+                ${enc.outcomeBadge}
+              </div>
+
+              <div class="rounded-xl bg-slate-50 border border-slate-100 p-2.5 text-xs space-y-1.5">
+                <div class="flex items-center justify-between gap-2">
+                  <span class="font-extrabold text-slate-800 truncate">${name1}:</span>
+                  <span class="font-bold text-indigo-700 text-right">Pareja: ${enc.pair1Name}</span>
+                </div>
+                <div class="flex items-center justify-between gap-2">
+                  <span class="font-extrabold text-slate-800 truncate">${name2}:</span>
+                  <span class="font-bold text-emerald-700 text-right">Pareja: ${enc.pair2Name}</span>
+                </div>
+              </div>
+            </div>
+          `).join('')}
+        </div>`
+      : `<div class="mt-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-xs text-slate-500">
+          No hay partidos registrados donde coincidan <strong>${name1}</strong> y <strong>${name2}</strong> en las temporadas cargadas (${seasons.map(s => s.seasonName).join(', ')}).
+        </div>`
+    }
+  `;
+}
+
+function normalizeVersusSearchText(str) {
+  return String(str || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+function normalizeVersusSearchText(str) {
+  return String(str || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+function findIndividualPoolCardAnchor() {
+  const formEl = document.querySelector('form[onsubmit*="registerIndividualPlayer"]');
+  if (formEl) {
+    const card = formEl.closest('.bg-white.rounded-2xl') || formEl.parentElement;
+    if (card && card.parentElement) return card;
+  }
+
+  const headings = Array.from(
+    document.querySelectorAll('#appContent h1, #appContent h2, #appContent h3, #appContent h4, h2, h3')
+  );
+  const targetHeading = headings.find(el => {
+    if (el.closest('#versusInPlayersTabSection')) return false;
+    const txt = (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    return txt.includes('inscripción individual al pool') || txt.includes('inscripcion individual al pool');
+  });
+
+  if (targetHeading) {
+    const card = targetHeading.closest('.bg-white.rounded-2xl') || targetHeading.parentElement;
+    if (card && card.parentElement) return card;
+  }
+
+  return null;
+}
+
+function mountVersusBelowIndividualEnrollment(sectionEl) {
+  if (!sectionEl) return false;
+
+  const anchor = findIndividualPoolCardAnchor();
+  if (anchor && anchor.parentElement) {
+    if (anchor.nextElementSibling !== sectionEl) {
+      anchor.parentElement.insertBefore(sectionEl, anchor.nextElementSibling);
+    }
+    return true;
+  }
+
+  return false;
+}
+
+function extractPlayersFromDomFallback() {
+  const names = new Set();
+  const root = document.getElementById('appContent') || document.body;
+  if (!root) return [];
+
+  const cards = root.querySelectorAll('div, li, tr');
+  cards.forEach(el => {
+    if (el.closest('#versusInPlayersTabSection')) return;
+    if (el.children.length > 6) return;
+    const text = (el.innerText || '').trim();
+    if (!text || text.length > 90) return;
+
+    const hasProfileBtn = Boolean(el.querySelector('button'));
+    if (!hasProfileBtn) return;
+
+    const firstLine = text.split('\n')[0].trim();
+    if (
+      firstLine.length >= 3 &&
+      firstLine.length <= 45 &&
+      !/ranking y pool/i.test(firstLine) &&
+      !/inscripción individual/i.test(firstLine) &&
+      !/versus entre jugadores/i.test(firstLine) &&
+      !/por ranking/i.test(firstLine) &&
+      !/a–z/i.test(firstLine) &&
+      !/a-z/i.test(firstLine)
+    ) {
+      names.add(firstLine);
+    }
+  });
+
+  return Array.from(names)
+    .sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }))
+    .map((name, idx) => ({ id: `dom_${idx}_${name}`, name }));
+}
+
+function getVersusPlayersSafe() {
+  try {
+    if (typeof collectAllSeasonsVersusData === 'function' && typeof getAllPlayersVersusList === 'function') {
+      const seasons = collectAllSeasonsVersusData();
+      const list = getAllPlayersVersusList(seasons);
+      if (Array.isArray(list) && list.length > 0) {
+        return list;
+      }
+    }
+  } catch (_) {}
+
+  const globalCandidates = [
+    window.playersPool,
+    window.poolPlayers,
+    window.players,
+    window.state?.players,
+    window.state?.pool,
+    window.db?.players
+  ];
+  for (const cand of globalCandidates) {
+    if (Array.isArray(cand) && cand.length > 0) {
+      return cand
+        .map((p, i) => {
+          if (typeof p === 'string') return { id: `g_${i}`, name: p.trim() };
+          const n = String(p?.name || p?.nombre || p?.fullName || '').trim();
+          return n ? { id: String(p?.id ?? i), name: n } : null;
+        })
+        .filter(Boolean);
+    }
+  }
+
+  return extractPlayersFromDomFallback();
+}
+
+function filterVersusPlayersList(allPlayers, rawQuery) {
+  const q = normalizeVersusSearchText(rawQuery);
+  const list = Array.isArray(allPlayers) ? allPlayers : [];
+  if (!q) return list;
+
+  const startsWith = list.filter(p => normalizeVersusSearchText(p.name).startsWith(q));
+  const wordStarts = list.filter(p => {
+    const norm = normalizeVersusSearchText(p.name);
+    if (norm.startsWith(q)) return false;
+    return norm.split(/\s+/).some(word => word.startsWith(q));
+  });
+  const contains = list.filter(p => {
+    const norm = normalizeVersusSearchText(p.name);
+    if (norm.startsWith(q)) return false;
+    if (norm.split(/\s+/).some(word => word.startsWith(q))) return false;
+    return norm.includes(q);
+  });
+
+  return [...startsWith, ...wordStarts, ...contains];
+}
+
+function buildVersusDropdownHtml(which, allPlayers, rawQuery, selectedId) {
+  const list = Array.isArray(allPlayers) ? allPlayers : [];
+  const matches = filterVersusPlayersList(list, rawQuery);
+
+  if (!matches.length) {
+    const safeQ = String(rawQuery || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `
+      <div
+        id="versus${which}Dropdown"
+        data-readonly-allowed="true"
+        class="absolute left-0 right-0 mt-1 max-h-60 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-2xl z-[150]"
+      >
+        <div class="px-3 py-3 text-xs text-slate-400 text-center">Sin jugadores que coincidan con "${safeQ}"</div>
+      </div>
+    `;
+  }
+
+  return `
+    <div
+      id="versus${which}Dropdown"
+      data-readonly-allowed="true"
+      class="absolute left-0 right-0 mt-1 max-h-60 overflow-y-auto bg-white border border-slate-200 rounded-xl shadow-2xl z-[150] divide-y divide-slate-100"
+    >
+      ${matches
+        .map(p => {
+          const active = String(p.id) === String(selectedId);
+          const safeName = String(p.name || '').replace(/"/g, '&quot;');
+          return `
+            <button
+              type="button"
+              data-readonly-allowed="true"
+              data-pick-which="${which}"
+              data-pick-id="${String(p.id || '')}"
+              data-pick-name="${safeName}"
+              class="w-full text-left px-3 py-2.5 text-xs font-bold cursor-pointer select-none transition ${
+                active ? 'bg-indigo-600 text-white' : 'text-slate-800 hover:bg-indigo-50 hover:text-indigo-900'
+              }"
+            >
+              ${p.name}
+            </button>
+          `;
+        })
+        .join('')}
+    </div>
+  `;
+}
+
+function bindVersusDropdownButtons(view, host) {
+  if (!view || !host) return;
+
+  host.querySelectorAll('button[data-pick-id]').forEach(btn => {
+    const handleSelect = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+
+      window.__versusInteractingUntil = Date.now() + 500;
+
+      const w = btn.getAttribute('data-pick-which');
+      const pid = btn.getAttribute('data-pick-id') || '';
+      const pname = btn.getAttribute('data-pick-name') || '';
+
+      if (w === 'P1') {
+        window.__versusP1Id = pid;
+        window.__versusP1Query = pname;
+        const inp1 = view.querySelector('#versusP1Input');
+        if (inp1) inp1.value = pname;
+        const badge1 = view.querySelector('#versusP1SelectedBadge');
+        if (badge1) {
+          badge1.textContent = `✓ ${pname}`;
+          badge1.style.display = 'inline-flex';
+        }
+      } else {
+        window.__versusP2Id = pid;
+        window.__versusP2Query = pname;
+        const inp2 = view.querySelector('#versusP2Input');
+        if (inp2) inp2.value = pname;
+      }
+
+      window.__versusOpenPicker = null;
+      const latestList = getVersusPlayersSafe();
+      renderVersusDropdownsNow(latestList);
+      if (typeof renderVersusResultsBody === 'function') {
+        renderVersusResultsBody(latestList);
+      }
+    };
+
+    btn.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      window.__versusInteractingUntil = Date.now() + 500;
+    });
+    btn.addEventListener('click', handleSelect, true);
+  });
+}
+
+function renderSingleVersusPicker(which, allPlayers, forcedQuery) {
+  const view = document.getElementById('versusInPlayersTabSection');
+  if (!view) return;
+
+  const inp = view.querySelector(`#versus${which}Input`);
+  const dropdownHost = view.querySelector(`#versus${which}DropdownHost`);
+  if (!dropdownHost) return;
+
+  const isOpen = window.__versusOpenPicker === which;
+  if (!isOpen) {
+    dropdownHost.innerHTML = '';
+    return;
+  }
+
+  const list = Array.isArray(allPlayers) && allPlayers.length ? allPlayers : getVersusPlayersSafe();
+  const selectedId = which === 'P1' ? (window.__versusP1Id || '') : (window.__versusP2Id || '');
+  const rawQuery =
+    typeof forcedQuery === 'string'
+      ? forcedQuery
+      : inp
+        ? inp.value
+        : which === 'P1'
+          ? (window.__versusP1Query || '')
+          : (window.__versusP2Query || '');
+
+  dropdownHost.innerHTML = buildVersusDropdownHtml(which, list, rawQuery, selectedId);
+  bindVersusDropdownButtons(view, dropdownHost);
+}
+
+function renderVersusDropdownsNow(allPlayers) {
+  const view = document.getElementById('versusInPlayersTabSection');
+  if (!view) return;
+
+  const list = Array.isArray(allPlayers) && allPlayers.length ? allPlayers : getVersusPlayersSafe();
+  renderSingleVersusPicker('P1', list);
+  renderSingleVersusPicker('P2', list);
+}
+
+// Mantiene compatibilidad si algo llama a updatePickerDropdownsOnly
+function updatePickerDropdownsOnly(allPlayers) {
+  renderVersusDropdownsNow(allPlayers);
+}
+
+function resetVersusSelectionState(section) {
+  window.__versusInteractingUntil = Date.now() + 400;
+  window.__versusP1Id = '';
+  window.__versusP2Id = '';
+  window.__versusP1Query = '';
+  window.__versusP2Query = '';
+  window.__versusOpenPicker = null;
+
+  const root = section || document.getElementById('versusInPlayersTabSection');
+  if (root) {
+    const inp1 = root.querySelector('#versusP1Input');
+    const inp2 = root.querySelector('#versusP2Input');
+    const badge1 = root.querySelector('#versusP1SelectedBadge');
+    if (inp1) {
+      inp1.value = '';
+      inp1.removeAttribute('readonly');
+      inp1.disabled = false;
+    }
+    if (inp2) {
+      inp2.value = '';
+      inp2.removeAttribute('readonly');
+      inp2.disabled = false;
+    }
+    if (badge1) {
+      badge1.textContent = '';
+      badge1.style.display = 'none';
+    }
+  }
+
+  const currentList = getVersusPlayersSafe();
+  renderVersusDropdownsNow(currentList);
+  if (typeof renderVersusResultsBody === 'function') {
+    renderVersusResultsBody(currentList);
+  }
+}
+
+function renderVersusSectionInPlayersTab() {
+  const activeEl = document.activeElement;
+  const typingInsideVersus =
+    activeEl &&
+    typeof activeEl.closest === 'function' &&
+    activeEl.closest('#versusInPlayersTabSection') &&
+    (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
+
+  if (typingInsideVersus || (window.__versusInteractingUntil && Date.now() < window.__versusInteractingUntil)) {
+    return;
+  }
+
+  const allPlayers = getVersusPlayersSafe();
+
+  let section = document.getElementById('versusInPlayersTabSection');
+  if (!section) {
+    section = document.createElement('section');
+    section.id = 'versusInPlayersTabSection';
+    section.setAttribute('data-readonly-allowed', 'true');
+    section.className = 'w-full bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-4';
+    section.innerHTML = `
+      <div class="flex flex-col gap-3 border-b border-slate-100 pb-3">
+        <div>
+          <div class="flex flex-wrap items-center gap-2">
+            <h3 class="text-base font-black text-slate-900">⚔️ Versus entre Jugadores</h3>
+            <span id="versusP1SelectedBadge" style="display:none;" class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200"></span>
+          </div>
+          <p class="text-xs text-slate-500">Escribe el nombre o despliega la lista para comparar dos jugadores en fase regular y playoffs en todas las temporadas.</p>
+        </div>
+
+        <div id="versusPickerControls" class="flex flex-wrap items-center gap-2">
+          <div class="relative flex-1 min-w-[190px] sm:w-56 sm:flex-none" data-picker-box="P1">
+            <div class="flex items-center border border-slate-300 rounded-xl bg-white focus-within:ring-2 focus-within:ring-indigo-500 overflow-hidden">
+              <input
+                type="text"
+                id="versusP1Input"
+                data-readonly-allowed="true"
+                placeholder="Escribir nombre Jugador 1..."
+                autocomplete="off"
+                class="w-full px-3 py-2 text-xs font-bold text-slate-800 bg-transparent outline-none"
+              >
+              <button
+                type="button"
+                id="versusP1ToggleBtn"
+                data-readonly-allowed="true"
+                class="px-2.5 py-2 text-xs text-slate-500 hover:text-slate-800 hover:bg-slate-50 cursor-pointer border-l border-slate-200 select-none"
+                title="Desplegar lista de Jugador 1"
+              >
+                ▼
+              </button>
+            </div>
+            <div id="versusP1DropdownHost"></div>
+          </div>
+
+          <span class="text-xs font-black text-slate-400 px-0.5 select-none">VS</span>
+
+          <div class="relative flex-1 min-w-[190px] sm:w-56 sm:flex-none" data-picker-box="P2">
+            <div class="flex items-center border border-slate-300 rounded-xl bg-white focus-within:ring-2 focus-within:ring-indigo-500 overflow-hidden">
+              <input
+                type="text"
+                id="versusP2Input"
+                data-readonly-allowed="true"
+                placeholder="Escribir nombre Jugador 2..."
+                autocomplete="off"
+                class="w-full px-3 py-2 text-xs font-bold text-slate-800 bg-transparent outline-none"
+              >
+              <button
+                type="button"
+                id="versusP2ToggleBtn"
+                data-readonly-allowed="true"
+                class="px-2.5 py-2 text-xs text-slate-500 hover:text-slate-800 hover:bg-slate-50 cursor-pointer border-l border-slate-200 select-none"
+                title="Desplegar lista de Jugador 2"
+              >
+                ▼
+              </button>
+            </div>
+            <div id="versusP2DropdownHost"></div>
+          </div>
+
+          <button
+            type="button"
+            id="versusSwapBtn"
+            data-readonly-allowed="true"
+            class="px-3 py-2 rounded-xl border border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold cursor-pointer select-none inline-flex items-center justify-center"
+            title="Intercambiar jugadores"
+          >
+            ⇄
+          </button>
+
+          <button
+            type="button"
+            id="versusRefreshBtn"
+            data-readonly-allowed="true"
+            class="px-3.5 py-2 rounded-xl border border-slate-300 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer select-none transition inline-flex items-center gap-1"
+            title="Refrescar comparación"
+          >
+            ↻ Refrescar
+          </button>
+        </div>
+      </div>
+      <div id="versusContentBody"></div>
+    `;
+
+    ['keydown', 'keypress', 'keyup', 'beforeinput', 'input'].forEach(evName => {
+      section.addEventListener(
+        evName,
+        (e) => {
+          if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) {
+            window.__versusInteractingUntil = Date.now() + 800;
+            e.stopPropagation();
+          }
+        },
+        true
+      );
+    });
+
+    ['P1', 'P2'].forEach(which => {
+      const box = section.querySelector(`[data-picker-box="${which}"]`);
+      const inp = section.querySelector(`#versus${which}Input`);
+      const tgl = section.querySelector(`#versus${which}ToggleBtn`);
+
+      const applyImmediateFilter = (evVal) => {
+        if (!inp) return;
+        const val = typeof evVal === 'string' ? evVal : inp.value;
+        window.__versusInteractingUntil = Date.now() + 800;
+        window.__versusOpenPicker = which;
+        if (which === 'P1') {
+          window.__versusP1Query = val;
+          window.__versusP1Id = '';
+        } else {
+          window.__versusP2Query = val;
+          window.__versusP2Id = '';
+        }
+
+        const currentList = getVersusPlayersSafe();
+        renderSingleVersusPicker(which, currentList, val);
+
+        requestAnimationFrame(() => {
+          const latestVal = inp.value;
+          if (which === 'P1') window.__versusP1Query = latestVal;
+          else window.__versusP2Query = latestVal;
+          renderSingleVersusPicker(which, getVersusPlayersSafe(), latestVal);
+        });
+
+        if (typeof renderVersusResultsBody === 'function') {
+          renderVersusResultsBody(currentList);
+        }
+      };
+
+      if (box) {
+        box.addEventListener('mousedown', (e) => {
+          e.stopPropagation();
+          window.__versusInteractingUntil = Date.now() + 500;
+        });
+        box.addEventListener('click', (e) => {
+          e.stopPropagation();
+        });
+      }
+
+      if (inp) {
+        inp.disabled = false;
+        inp.removeAttribute('readonly');
+        inp.addEventListener('focus', () => {
+          window.__versusInteractingUntil = Date.now() + 800;
+          window.__versusOpenPicker = which;
+          renderSingleVersusPicker(which, getVersusPlayersSafe(), inp.value);
+        });
+        inp.addEventListener('input', (e) => applyImmediateFilter(e.target ? e.target.value : inp.value));
+        inp.addEventListener('keyup', (e) => applyImmediateFilter(e.target ? e.target.value : inp.value));
+      }
+
+      if (tgl) {
+        tgl.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          window.__versusInteractingUntil = Date.now() + 500;
+        });
+        tgl.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          window.__versusInteractingUntil = Date.now() + 500;
+          window.__versusOpenPicker = window.__versusOpenPicker === which ? null : which;
+          if (inp) inp.focus();
+          renderSingleVersusPicker(which, getVersusPlayersSafe(), inp ? inp.value : '');
+        });
+      }
+    });
+
+    section.querySelector('#versusSwapBtn').addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      window.__versusInteractingUntil = Date.now() + 350;
+
+      const tmpId = window.__versusP1Id;
+      const tmpQ = window.__versusP1Query;
+      window.__versusP1Id = window.__versusP2Id;
+      window.__versusP1Query = window.__versusP2Query;
+      window.__versusP2Id = tmpId;
+      window.__versusP2Query = tmpQ;
+      window.__versusOpenPicker = null;
+
+      const inp1 = section.querySelector('#versusP1Input');
+      const inp2 = section.querySelector('#versusP2Input');
+      if (inp1) inp1.value = window.__versusP1Query || '';
+      if (inp2) inp2.value = window.__versusP2Query || '';
+
+      const currentList = getVersusPlayersSafe();
+      renderVersusDropdownsNow(currentList);
+      if (typeof renderVersusResultsBody === 'function') {
+        renderVersusResultsBody(currentList);
+      }
+    });
+
+    section.querySelector('#versusRefreshBtn').addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      resetVersusSelectionState(section);
+    });
+  }
+
+  const mounted = mountVersusBelowIndividualEnrollment(section);
+
+  if (mounted) {
+    section.style.display = 'block';
+
+    const inp1 = section.querySelector('#versusP1Input');
+    const inp2 = section.querySelector('#versusP2Input');
+    if (inp1) {
+      inp1.disabled = false;
+      inp1.removeAttribute('readonly');
+      if (document.activeElement !== inp1 && inp1.value !== (window.__versusP1Query || '')) {
+        inp1.value = window.__versusP1Query || '';
+      }
+    }
+    if (inp2) {
+      inp2.disabled = false;
+      inp2.removeAttribute('readonly');
+      if (document.activeElement !== inp2 && inp2.value !== (window.__versusP2Query || '')) {
+        inp2.value = window.__versusP2Query || '';
+      }
+    }
+    renderVersusDropdownsNow(allPlayers);
+    if (typeof renderVersusResultsBody === 'function') {
+      renderVersusResultsBody(allPlayers);
+    }
+  } else {
+    section.style.display = 'none';
+  }
+}
+
+document.addEventListener('click', (e) => {
+  if (e.target && typeof e.target.closest === 'function' && e.target.closest('#versusInPlayersTabSection')) {
+    return;
+  }
+  if (window.__versusOpenPicker) {
+    window.__versusOpenPicker = null;
+    renderVersusDropdownsNow(getVersusPlayersSafe());
+  }
+});
+
+if (!window.__versusAppContentObserverBound) {
+  window.__versusAppContentObserverBound = true;
+  const startVersusObserver = () => {
+    const target = document.getElementById('appContent') || document.body;
+    if (!target || typeof MutationObserver !== 'function') return;
+    let timer = null;
+    const obs = new MutationObserver((mutations) => {
+      const activeEl = document.activeElement;
+      const typingInsideVersus =
+        activeEl &&
+        typeof activeEl.closest === 'function' &&
+        activeEl.closest('#versusInPlayersTabSection') &&
+        (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
+
+      if (typingInsideVersus || (window.__versusInteractingUntil && Date.now() < window.__versusInteractingUntil)) {
+        return;
+      }
+
+      const onlyInsideVersus = mutations.every(
+        m => m.target && typeof m.target.closest === 'function' && m.target.closest('#versusInPlayersTabSection')
+      );
+      if (onlyInsideVersus) return;
+
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (typeof renderVersusSectionInPlayersTab === 'function') {
+          renderVersusSectionInPlayersTab();
+        }
+      }, 100);
+    });
+    obs.observe(target, { childList: true, subtree: true });
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', startVersusObserver, { once: true });
+  } else {
+    startVersusObserver();
+  }
+}
+
+const __prevPostRenderVersusPlayersTab =
+  typeof runPostRenderEnhancements === 'function' ? runPostRenderEnhancements : null;
+
+runPostRenderEnhancements = function (...args) {
+  const res = __prevPostRenderVersusPlayersTab
+    ? __prevPostRenderVersusPlayersTab.apply(this, args)
+    : undefined;
+  const activeEl = document.activeElement;
+  const typingInsideVersus =
+    activeEl &&
+    typeof activeEl.closest === 'function' &&
+    activeEl.closest('#versusInPlayersTabSection') &&
+    (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
+
+  if (!typingInsideVersus && !(window.__versusInteractingUntil && Date.now() < window.__versusInteractingUntil)) {
+    if (typeof renderVersusSectionInPlayersTab === 'function') {
+      renderVersusSectionInPlayersTab();
+      setTimeout(renderVersusSectionInPlayersTab, 100);
+    }
+  }
+  return res;
+};
+
+setTimeout(renderVersusSectionInPlayersTab, 300);
+
+if (!window.__versusHardFilterPatchBound) {
+  window.__versusHardFilterPatchBound = true;
+
+  const hardRefreshVersusInput = (inpEl) => {
+    if (!inpEl || (inpEl.id !== 'versusP1Input' && inpEl.id !== 'versusP2Input')) return;
+    const which = inpEl.id === 'versusP1Input' ? 'P1' : 'P2';
+    const currentVal = inpEl.value;
+
+    window.__versusInteractingUntil = Date.now() + 900;
+    window.__versusOpenPicker = which;
+    if (which === 'P1') {
+      window.__versusP1Query = currentVal;
+      window.__versusP1Id = '';
+    } else {
+      window.__versusP2Query = currentVal;
+      window.__versusP2Id = '';
+    }
+
+    const runUpdate = () => {
+      const valNow = inpEl.value;
+      if (which === 'P1') window.__versusP1Query = valNow;
+      else window.__versusP2Query = valNow;
+
+      const list = typeof getVersusPlayersSafe === 'function' ? getVersusPlayersSafe() : [];
+      if (typeof renderSingleVersusPicker === 'function') {
+        renderSingleVersusPicker(which, list, valNow);
+      }
+    };
+
+    runUpdate();
+    setTimeout(runUpdate, 0);
+    requestAnimationFrame(runUpdate);
+  };
+
+  ['input', 'keyup', 'keydown'].forEach(evName => {
+    window.addEventListener(
+      evName,
+      (e) => {
+        const target = e.target;
+        if (target && (target.id === 'versusP1Input' || target.id === 'versusP2Input')) {
+          hardRefreshVersusInput(target);
+        }
+      },
+      true
+    );
+  });
+}
+
 
 window.addEventListener('DOMContentLoaded', initApp);
